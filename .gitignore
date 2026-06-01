@@ -1,0 +1,7 @@
+node_modules
+dist
+*.local
+.DS_Store
+
+# design handoff bundle (source of truth, kept out of app build)
+design_download.tmp
