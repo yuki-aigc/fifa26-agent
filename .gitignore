@@ -5,3 +5,6 @@ dist
 
 # design handoff bundle (source of truth, kept out of app build)
 design_download.tmp
+
+# local env
+.env

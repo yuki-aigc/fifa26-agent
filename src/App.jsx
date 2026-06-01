@@ -1,8 +1,8 @@
 /* ===========================================================
-   App 根组件 · 导航栈 + 底部 Tab
+   App 根组件 · 导航栈 + 底部 Tab (数据来自后端 API)
    =========================================================== */
 import { useState, useEffect } from 'react';
-import { byCode } from './data/wc.js';
+import { DataProvider, useData } from './data/store.jsx';
 import { Header } from './components/ui.jsx';
 import {
   MatchesScreen,
@@ -46,32 +46,55 @@ function TabBar({ tab, onTab }) {
   );
 }
 
-export default function App() {
+function Splash({ error, apiBase }) {
+  return (
+    <div className="screen" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, textAlign: 'center' }}>
+      <div style={{ fontSize: 44 }}>{error ? '⚠️' : '⚽'}</div>
+      {error ? (
+        <>
+          <div style={{ fontWeight: 900, fontSize: 16, color: '#e05a5a' }}>无法连接后端</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#9f927d', maxWidth: 280 }}>{error}</div>
+          <div style={{ fontSize: 11, color: '#c4b89e', marginTop: 4 }}>API: {apiBase}<br />请确认后端已启动 (cd server &amp;&amp; pnpm dev)</div>
+        </>
+      ) : (
+        <div style={{ fontWeight: 800, fontSize: 14, color: '#9f927d' }}>加载世界杯数据中…</div>
+      )}
+    </div>
+  );
+}
+
+function Shell() {
+  const { byCode, loading, error, apiBase } = useData();
   const [tab, setTab] = useState('matches');
-  const [stack, setStack] = useState([]); // detail 视图栈
+  const [stack, setStack] = useState([]);
 
   const push = (v) => setStack((s) => [...s, v]);
   const back = () => setStack((s) => s.slice(0, -1));
   const switchTab = (k) => { setTab(k); setStack([]); };
 
   const cur = stack[stack.length - 1] || null;
+  const ready = !loading && !error && byCode;
 
-  // 标题
-  let title, sub, content;
+  let title = '世界杯预测';
+  let sub = '2026 · 美加墨';
+  let content = <Splash error={error} apiBase={apiBase} />;
   const onBack = stack.length ? back : null;
-  if (!cur) {
-    if (tab === 'matches') { title = '世界杯预测'; sub = '2026 · 美加墨'; content = <MatchesScreen onOpenMatch={(m) => push({ type: 'match', m })} />; }
-    if (tab === 'teams') { title = '球队分析'; sub = '32强实力数据'; content = <TeamsScreen onOpenTeam={(c) => push({ type: 'team', code: c })} />; }
-    if (tab === 'players') { title = '球员能力'; sub = '面板属性 · 五维雷达'; content = <PlayersScreen onOpenPlayer={(c, i) => push({ type: 'player', code: c, idx: i })} />; }
-  } else if (cur.type === 'match') {
-    title = '比赛预测'; sub = cur.m.stage;
-    content = <MatchDetailScreen match={cur.m} onOpenTeam={(c) => push({ type: 'team', code: c })} />;
-  } else if (cur.type === 'team') {
-    title = byCode[cur.code].name; sub = byCode[cur.code].en;
-    content = <TeamDetailScreen code={cur.code} onOpenPlayer={(c, i) => push({ type: 'player', code: c, idx: i })} />;
-  } else if (cur.type === 'player') {
-    title = '球员详情'; sub = byCode[cur.code].name;
-    content = <PlayerDetailScreen code={cur.code} idx={cur.idx} />;
+
+  if (ready) {
+    if (!cur) {
+      if (tab === 'matches') { title = '世界杯预测'; sub = '2026 · 美加墨'; content = <MatchesScreen onOpenMatch={(m) => push({ type: 'match', match: m })} />; }
+      if (tab === 'teams') { title = '球队分析'; sub = '48强实力数据'; content = <TeamsScreen onOpenTeam={(c) => push({ type: 'team', code: c })} />; }
+      if (tab === 'players') { title = '球员能力'; sub = '面板属性 · 五维雷达'; content = <PlayersScreen onOpenPlayer={(pl) => push({ type: 'player', player: pl })} />; }
+    } else if (cur.type === 'match') {
+      title = '比赛预测'; sub = cur.match.stage;
+      content = <MatchDetailScreen match={cur.match} onOpenTeam={(c) => push({ type: 'team', code: c })} />;
+    } else if (cur.type === 'team') {
+      title = byCode[cur.code]?.name ?? '球队'; sub = byCode[cur.code]?.en ?? '';
+      content = <TeamDetailScreen code={cur.code} onOpenPlayer={(pl) => push({ type: 'player', player: pl })} />;
+    } else if (cur.type === 'player') {
+      title = '球员详情'; sub = cur.player.team.name;
+      content = <PlayerDetailScreen player={cur.player} />;
+    }
   }
 
   return (
@@ -79,7 +102,15 @@ export default function App() {
       <StatusBar />
       <Header title={title} sub={sub} onBack={onBack} />
       {content}
-      {!cur && <TabBar tab={tab} onTab={switchTab} />}
+      {ready && !cur && <TabBar tab={tab} onTab={switchTab} />}
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <DataProvider>
+      <Shell />
+    </DataProvider>
   );
 }

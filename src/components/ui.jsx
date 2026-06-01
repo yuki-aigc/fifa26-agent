@@ -2,16 +2,28 @@
    UI 基础组件 + 五边形雷达图
    =========================================================== */
 import { useState, useEffect } from 'react';
-import { byCode } from '../data/wc.js';
+import { useData } from '../data/store.jsx';
 import leafIcon from '../assets/img/icons/icon-leaf.png';
 
-/* ---------- 国旗圆形徽章 ---------- */
+/* ---------- 国旗圆形徽章 (emoji 旗帜) ---------- */
 export function FlagBadge({ code, size = 46 }) {
-  const t = byCode[code];
-  if (!t) return null;
+  const { byCode } = useData();
+  const t = byCode?.[code];
   return (
-    <div className="flag" style={{ width: size, height: size, background: t.flag, backgroundColor: '#ddd' }}>
-      <span className="code">{code}</span>
+    <div
+      className="flag"
+      style={{
+        width: size,
+        height: size,
+        background: '#fff',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: Math.round(size * 0.62),
+        lineHeight: 1,
+      }}
+    >
+      {t?.flagEmoji || <span className="code" style={{ position: 'static', fontSize: size * 0.26 }}>{code}</span>}
     </div>
   );
 }
