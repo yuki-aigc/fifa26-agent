@@ -19,6 +19,6 @@ export type PredictMatchArgs = Static<typeof PredictMatchSchema>;
 
 export const predictMatchTool = {
   name: 'submit_prediction',
-  description: '提交对这场世界杯比赛的结构化预测。win+draw+loss 必须合计为 100。',
+  description: '提交对这场 FIFA26 比赛的结构化预测。win+draw+loss 必须合计为 100。',
   parameters: PredictMatchSchema,
 };

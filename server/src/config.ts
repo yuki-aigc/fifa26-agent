@@ -7,7 +7,7 @@ function env(key: string, fallback = ''): string {
 export const config = {
   port: Number(env('PORT', '8787')),
   host: env('HOST', '0.0.0.0'),
-  databaseUrl: env('DATABASE_URL', './data/wc2026.sqlite'),
+  databaseUrl: env('DATABASE_URL', './data/fifa26.sqlite'),
 
   ai: {
     provider: env('AI_PROVIDER', 'anthropic'),

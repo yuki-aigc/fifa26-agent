@@ -1,9 +1,9 @@
 {
-  "name": "worldcup2026-server",
+  "name": "fifa26-server",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "世界杯2026 预测系统 · 后端 API (Fastify + Drizzle/SQLite + pi AI)",
+  "description": "FIFA26 预测系统 · 后端 API (Fastify + Drizzle/SQLite + pi AI)",
   "engines": {
     "node": ">=22.19.0"
   },

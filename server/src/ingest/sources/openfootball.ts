@@ -1,7 +1,7 @@
 /* ===========================================================
    数据源 · OpenFootball worldcup.json (免费, 公共领域)
    https://github.com/openfootball/worldcup.json
-   提供 2026 世界杯的 48 队身份/分组/旗帜 + 全部 104 场赛程。
+   提供 FIFA26的 48 队身份/分组/旗帜 + 全部 104 场赛程。
    =========================================================== */
 const BASE = 'https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026';
 

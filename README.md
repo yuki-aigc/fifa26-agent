@@ -1,6 +1,6 @@
-# 世界杯2026 预测系统
+# FIFA26 预测系统
 
-手机端的 2026 世界杯比赛预测系统，延续 **animal-island-ui**（动物之森风）的活泼游戏化视觉：暖羊皮纸背景、薄荷绿主色、任天堂式 3D 按钮阴影、圆润 pill 形状、Nunito + Noto Sans SC 字体、叶子图标。
+手机端的 FIFA26比赛预测系统，延续 **animal-island-ui**（动物之森风）的活泼游戏化视觉：暖羊皮纸背景、薄荷绿主色、任天堂式 3D 按钮阴影、圆润 pill 形状、Nunito + Noto Sans SC 字体、叶子图标。
 
 由 [Claude Design](https://claude.ai/design) 的 HTML/CSS/JS 原型实现为真正的 **React + Vite** 应用,**数据与预测来自 `server/` 后端 API**(原 mock 数据已下线)。
 

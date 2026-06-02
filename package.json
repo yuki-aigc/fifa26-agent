@@ -1,9 +1,9 @@
 {
-  "name": "worldcup2026-agent",
+  "name": "fifa26-agent",
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "世界杯2026 预测系统 · 动物之森风手机端原型 (React + Vite)",
+  "description": "FIFA26 预测系统 · 动物之森风手机端原型 (React + Vite)",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

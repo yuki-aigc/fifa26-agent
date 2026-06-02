@@ -86,6 +86,6 @@ export const DEFAULT_META: Omit<TeamMeta, 'zh'> = {
   mid: 71,
   def: 71,
   titles: 0,
-  note: '世界杯参赛队',
+  note: 'FIFA26参赛队',
   form: F('WDWDL'),
 };

@@ -1,5 +1,5 @@
 /* ===========================================================
-   世界杯2026 预测系统 · 后端 API 入口 (Fastify)
+   FIFA26 预测系统 · 后端 API 入口 (Fastify)
    =========================================================== */
 import Fastify, { type FastifyError } from 'fastify';
 import cors from '@fastify/cors';
@@ -14,7 +14,7 @@ async function main() {
   await app.register(cors, { origin: true });
   await app.register(swagger, {
     openapi: {
-      info: { title: '世界杯2026 预测 API', version: '1.0.0', description: 'Teams / Players / Matches / Predictions' },
+      info: { title: 'FIFA26 预测 API', version: '1.0.0', description: 'Teams / Players / Matches / Predictions' },
     },
   });
   await app.register(swaggerUi, { routePrefix: '/docs' });

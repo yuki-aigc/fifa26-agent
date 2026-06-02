@@ -6,9 +6,9 @@ A user mocked up designs in HTML/CSS/JS using an AI design tool, then exported t
 
 ## What you should do — IMPORTANT
 
-**Read the chat transcripts first.** There are 1 chat transcript(s) in `worldcup2026-agent/chats/`. The transcripts show the full back-and-forth between the user and the design assistant — they tell you **what the user actually wants** and **where they landed** after iterating. Don't skip them. The final HTML files are the output, but the chat is where the intent lives.
+**Read the chat transcripts first.** There are 1 chat transcript(s) in `fifa26-agent/chats/`. The transcripts show the full back-and-forth between the user and the design assistant — they tell you **what the user actually wants** and **where they landed** after iterating. Don't skip them. The final HTML files are the output, but the chat is where the intent lives.
 
-**Find the primary design file under `worldcup2026-agent/project/` and read it top to bottom.** The chat transcripts will tell you which file the user was last iterating on. Then **follow its imports**: open every file it pulls in (shared components, CSS, scripts) so you understand how the pieces fit together before you start implementing.
+**Find the primary design file under `fifa26-agent/project/` and read it top to bottom.** The chat transcripts will tell you which file the user was last iterating on. Then **follow its imports**: open every file it pulls in (shared components, CSS, scripts) so you understand how the pieces fit together before you start implementing.
 
 **If anything is ambiguous, ask the user to confirm before you start implementing.** It's much cheaper to clarify scope up front than to build the wrong thing.
 
@@ -20,6 +20,6 @@ The design medium is **HTML/CSS/JS** — these are prototypes, not production co
 
 ## Bundle contents
 
-- `worldcup2026-agent/README.md` — this file
-- `worldcup2026-agent/chats/` — conversation transcripts (read these!)
-- `worldcup2026-agent/project/` — the `WorldCup2026_Agent` project files (HTML prototypes, assets, components)
+- `fifa26-agent/README.md` — this file
+- `fifa26-agent/chats/` — conversation transcripts (read these!)
+- `fifa26-agent/project/` — the `FIFA26_Agent` project files (HTML prototypes, assets, components)

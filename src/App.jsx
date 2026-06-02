@@ -22,7 +22,7 @@ function StatusBar() {
   return (
     <div className="statusbar">
       <span>{t}</span>
-      <span style={{ fontSize: 12, fontWeight: 900, color: '#11a89b', letterSpacing: '0.06em' }}>🏆 WC 2026</span>
+      <span style={{ fontSize: 12, fontWeight: 900, color: '#11a89b', letterSpacing: '0.06em' }}>🏆 FIFA26</span>
       <span className="dots"><span /><span /><span style={{ background: 'transparent' }} /><span className="bat" /></span>
     </div>
   );
@@ -57,7 +57,7 @@ function Splash({ error, apiBase }) {
           <div style={{ fontSize: 11, color: '#c4b89e', marginTop: 4 }}>API: {apiBase}<br />请确认后端已启动 (cd server &amp;&amp; pnpm dev)</div>
         </>
       ) : (
-        <div style={{ fontWeight: 800, fontSize: 14, color: '#9f927d' }}>加载世界杯数据中…</div>
+        <div style={{ fontWeight: 800, fontSize: 14, color: '#9f927d' }}>加载FIFA26数据中…</div>
       )}
     </div>
   );
@@ -75,14 +75,14 @@ function Shell() {
   const cur = stack[stack.length - 1] || null;
   const ready = !loading && !error && byCode;
 
-  let title = '世界杯预测';
+  let title = 'FIFA26';
   let sub = '2026 · 美加墨';
   let content = <Splash error={error} apiBase={apiBase} />;
   const onBack = stack.length ? back : null;
 
   if (ready) {
     if (!cur) {
-      if (tab === 'matches') { title = '世界杯预测'; sub = '2026 · 美加墨'; content = <MatchesScreen onOpenMatch={(m) => push({ type: 'match', match: m })} />; }
+      if (tab === 'matches') { title = 'FIFA26'; sub = '2026 · 美加墨'; content = <MatchesScreen onOpenMatch={(m) => push({ type: 'match', match: m })} />; }
       if (tab === 'teams') { title = '球队分析'; sub = '48强实力数据'; content = <TeamsScreen onOpenTeam={(c) => push({ type: 'team', code: c })} />; }
       if (tab === 'players') { title = '球员能力'; sub = '面板属性 · 五维雷达'; content = <PlayersScreen onOpenPlayer={(pl) => push({ type: 'player', player: pl })} />; }
     } else if (cur.type === 'match') {

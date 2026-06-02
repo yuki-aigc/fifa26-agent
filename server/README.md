@@ -1,4 +1,4 @@
-# 世界杯2026 预测系统 · 后端 API
+# FIFA26 预测系统 · 后端 API
 
 Fastify + Drizzle/SQLite + [`pi`](https://github.com/earendil-works/pi) AI 的预测后端。为后续 iOS App 提供 JSON REST 接口。
 
@@ -29,7 +29,7 @@ cd server
 cp .env.example .env          # 按需填入 AI / API-Football key
 pnpm install
 pnpm rebuild better-sqlite3   # 如首次安装未编译原生模块
-pnpm db:push                  # 建表 (SQLite -> ./data/wc2026.sqlite)
+pnpm db:push                  # 建表 (SQLite -> ./data/fifa26.sqlite)
 pnpm seed                     # 拉取真实数据写入 (无需任何 key)
 pnpm dev                      # http://localhost:8787  ·  文档 /docs
 ```

@@ -6,6 +6,6 @@ export default defineConfig({
   schema: './src/db/schema.ts',
   out: './drizzle',
   dbCredentials: {
-    url: process.env.DATABASE_URL ?? './data/wc2026.sqlite',
+    url: process.env.DATABASE_URL ?? './data/fifa26.sqlite',
   },
 });
