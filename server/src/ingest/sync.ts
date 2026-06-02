@@ -12,8 +12,9 @@ import { and, eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { teams, matches, odds as oddsTable } from '../db/schema.js';
 import { config } from '../config.js';
-import { fetchFixtures, fetchStatistics, fetchOdds, mapStatus, type AfFixture, type ParsedTeamStats } from './sources/apiFootball.js';
+import { fetchFixtures, fetchStatistics, fetchOdds, fetchInjuries, mapStatus, type AfFixture, type ParsedTeamStats } from './sources/apiFootball.js';
 import { upsertMatchStats } from '../services/stats.js';
+import { upsertInjury } from '../services/injuries.js';
 import { recomputeForm } from '../services/standings.js';
 import { gradeAllFinished } from '../services/accuracy.js';
 
@@ -26,6 +27,7 @@ export interface SyncOptions {
   date?: string; // YYYY-MM-DD (mode='date')
   stats?: boolean; // 拉比赛统计 (默认 true)
   odds?: boolean; // 拉赔率 (默认 true)
+  injuries?: boolean; // 拉伤病名单 (默认 true)
   quiet?: boolean;
 }
 
@@ -35,6 +37,7 @@ export interface SyncResult {
   matchesUpdated: number;
   statsTeams: number;
   oddsRows: number;
+  injuriesRows: number;
   graded: number;
 }
 
@@ -42,10 +45,11 @@ export async function runSync(opts: SyncOptions = {}): Promise<SyncResult> {
   const log = (...a: unknown[]) => !opts.quiet && console.log(...a);
   const stats = opts.stats ?? true;
   const pullOdds = opts.odds ?? true;
+  const pullInjuries = opts.injuries ?? true;
 
   if (!config.apiFootball.key) {
     log('⚠ 未配置 API_FOOTBALL_KEY,跳过实时同步 (种子数据已可用)。');
-    return { skipped: true, fixtures: 0, matchesUpdated: 0, statsTeams: 0, oddsRows: 0, graded: 0 };
+    return { skipped: true, fixtures: 0, matchesUpdated: 0, statsTeams: 0, oddsRows: 0, injuriesRows: 0, graded: 0 };
   }
 
   // 名称/externalId 索引
@@ -98,8 +102,9 @@ export async function runSync(opts: SyncOptions = {}): Promise<SyncResult> {
   }
   log(`  · 更新 ${matchesUpdated} 场`);
 
-  // 2) 比赛统计 -> match_stats
+  // 2) 比赛统计 -> match_stats + 伤病名单 (finished/live)
   let statsTeams = 0;
+  let injuriesRows = 0;
   if (stats) {
     for (const { matchId, fixtureId } of finishedOrLive) {
       const m = matchRows.find((r) => r.id === matchId);
@@ -125,8 +130,40 @@ export async function runSync(opts: SyncOptions = {}): Promise<SyncResult> {
         });
         statsTeams++;
       }
+      // 伤病: 已完赛/进行中场次 (补充历史缺阵记录)
+      if (pullInjuries) {
+        const injList = await fetchInjuries(fixtureId);
+        for (const inj of injList) {
+          const code = nameToCode.get(normName(inj.team.name));
+          if (!code) continue;
+          await upsertInjury({ matchId, teamCode: code, playerName: inj.player.name,
+            reason: inj.reason, playerPos: inj.player.type ?? null });
+          injuriesRows++;
+        }
+      }
     }
     log(`  · 写入统计 ${statsTeams} 队次`);
+  }
+
+  // 2b) 伤病: 未来 3 天待赛场次 (赛前预测最有价值)
+  if (pullInjuries) {
+    const now = Date.now();
+    const cutoff = now + 3 * 24 * 60 * 60 * 1000;
+    const upcoming = matchRows
+      .filter((m) => m.externalId && m.status === 'scheduled' && m.kickoff &&
+                     m.kickoff.getTime() > now && m.kickoff.getTime() < cutoff)
+      .slice(0, 5); // 每次 sync 最多 5 个，控制配额
+    for (const m of upcoming) {
+      const injList = await fetchInjuries(m.externalId!);
+      for (const inj of injList) {
+        const code = nameToCode.get(normName(inj.team.name));
+        if (!code) continue;
+        await upsertInjury({ matchId: m.id, teamCode: code, playerName: inj.player.name,
+          reason: inj.reason, playerPos: inj.player.type ?? null });
+        injuriesRows++;
+      }
+    }
+    if (injuriesRows > 0) log(`  · 写入伤病 ${injuriesRows} 条`);
   }
 
   // 3) 赔率 (时间序列)
@@ -160,7 +197,7 @@ export async function runSync(opts: SyncOptions = {}): Promise<SyncResult> {
   if (graded) log(`  · 预测打分 ${graded} 条`);
 
   log(`✅ 同步完成`);
-  return { fixtures: fixtures.length, matchesUpdated, statsTeams, oddsRows, graded };
+  return { fixtures: fixtures.length, matchesUpdated, statsTeams, oddsRows, injuriesRows, graded };
 }
 
 /** 把一条 fixture 对齐到我们的 match id (externalId 优先, 回退 队名+日期)。 */
@@ -188,6 +225,7 @@ if (isCli) {
     date: dateArg,
     stats: !argv.includes('--no-stats'),
     odds: !argv.includes('--no-odds'),
+    injuries: !argv.includes('--no-injuries'),
   })
     .then(() => process.exit(0))
     .catch((err) => {

@@ -25,6 +25,11 @@ export const config = {
     season: env('API_FOOTBALL_SEASON', '2026'),
   },
 
+  firo: {
+    apiKey: env('FIRO_API_KEY'),
+    privateKey: env('FIRO_PRIVATE_KEY'), // PKCS#8 DER base64
+  },
+
   // server 内置定时同步 (赛事期间开启)。需 API_FOOTBALL_KEY 才会真正运行。
   sync: {
     enabled: env('SYNC_ENABLED', 'false') === 'true',

@@ -3,7 +3,7 @@
    来源: API-Football /fixtures/statistics (sync 写入)。
    作为 AI 分析的重要因素: 真实控球/射门/xG 表现。
    =========================================================== */
-import { and, desc, eq, isNotNull } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, lt } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { matchStats, matches } from '../db/schema.js';
 import type { MatchStatsRow } from '../db/schema.js';
@@ -60,6 +60,22 @@ export async function teamStatAverages(code: string): Promise<StatAverages> {
     shotsOnTarget: avg((r) => r.shotsOnTarget),
     xg: avg((r) => r.xg),
   };
+}
+
+/**
+ * 距上一场已完赛比赛的间隔天数（整数，向下取整）。
+ * beforeKickoff: 即将开赛的比赛时间。返回 null 表示没有历史完赛记录。
+ */
+export async function getTeamRestDays(teamCode: string, beforeKickoff: Date): Promise<number | null> {
+  const all = await db
+    .select({ kickoff: matches.kickoff, homeCode: matches.homeCode, awayCode: matches.awayCode })
+    .from(matches)
+    .where(and(eq(matches.status, 'finished'), isNotNull(matches.kickoff), lt(matches.kickoff, beforeKickoff)))
+    .orderBy(desc(matches.kickoff));
+
+  const prev = all.find((m) => m.homeCode === teamCode || m.awayCode === teamCode);
+  if (!prev?.kickoff) return null;
+  return Math.floor((beforeKickoff.getTime() - prev.kickoff.getTime()) / (1000 * 60 * 60 * 24));
 }
 
 /** 已结束且有比分的场次 (派生战绩/对账复用)。 */

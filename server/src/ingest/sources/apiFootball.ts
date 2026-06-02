@@ -197,3 +197,19 @@ export async function fetchOdds(fixtureId?: string | number): Promise<ParsedOdds
   }
   return out;
 }
+
+/* ── 伤病 / 停赛名单 ────────────────────────────────────────── */
+export interface AfInjuryEntry {
+  player: { id: number; name: string; type: string | null };
+  team: { id: number; name: string };
+  reason: string; // 'Injury' | 'Suspension'
+}
+
+/** 某场赛前伤病/停赛名单。失败或无数据返回 []（不中断同步）。 */
+export async function fetchInjuries(fixtureId: string | number): Promise<AfInjuryEntry[]> {
+  try {
+    return await afGet<AfInjuryEntry>(`/injuries?fixture=${fixtureId}`);
+  } catch {
+    return [];
+  }
+}

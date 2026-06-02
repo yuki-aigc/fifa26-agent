@@ -7,6 +7,7 @@ import { completeSimple, type Context, type ToolCall } from '@earendil-works/pi-
 import type { Team, Player, Prediction, Odds, ScorePrediction, Factor, H2H } from '../domain/types.js';
 import type { TeamRecord } from '../services/standings.js';
 import type { StatAverages } from '../services/stats.js';
+import type { InjuryRow } from '../db/schema.js';
 import { resolveModel, aiKeyAvailable, aiInfo, aiRequestOptions } from './pi.js';
 import { predictMatchTool, type PredictMatchArgs } from './predictTool.js';
 import { SYSTEM_PROMPT, buildUserPrompt } from './prompt.js';
@@ -46,6 +47,10 @@ export async function predictWithAI(args: {
   homeStats?: StatAverages;
   awayStats?: StatAverages;
   oddsLine?: string;
+  homeInjuries?: InjuryRow[];
+  awayInjuries?: InjuryRow[];
+  homeRestDays?: number | null;
+  awayRestDays?: number | null;
 }): Promise<Prediction | null> {
   if (!aiKeyAvailable()) return null;
   const model = resolveModel();
@@ -63,7 +68,10 @@ export async function predictWithAI(args: {
       (c): c is ToolCall => c.type === 'toolCall' && c.name === predictMatchTool.name,
     );
     if (!call) {
-      console.warn('[ai] 模型未调用预测工具');
+      const hasContent = result.content.length > 0;
+      console.warn(hasContent
+        ? '[ai] 模型未调用预测工具 (返回了文本而非工具调用)'
+        : '[ai] 模型返回空响应 (可能 API key 无效或模型不支持工具调用)');
       return null;
     }
     const a = call.arguments as Partial<PredictMatchArgs>;

@@ -4,6 +4,7 @@
 import type { Team, Player, Odds, ScorePrediction, Factor, H2H } from '../domain/types.js';
 import type { TeamRecord } from '../services/standings.js';
 import type { StatAverages } from '../services/stats.js';
+import type { InjuryRow } from '../db/schema.js';
 
 export const SYSTEM_PROMPT = `你是一名专业的足球数据分析师,负责预测 FIFA26(2026 年世界杯)比赛。
 你会收到双方球队的实力数据、核心球员、近期状态,以及一个基线统计模型(Elo)给出的胜平负概率作为参考先验。
@@ -13,6 +14,7 @@ export const SYSTEM_PROMPT = `你是一名专业的足球数据分析师,负责�
 
 function fmtPlayers(players: Player[]): string {
   return players
+    .filter((p) => p.club !== '开赛前名单待公布')
     .slice(0, 5)
     .map(
       (p) =>
@@ -38,6 +40,30 @@ function fmtStats(s?: StatAverages): string {
   return parts.length ? `场均(${s.matches}场): ${parts.join(' / ')}` : '';
 }
 
+const REASON_ZH: Record<string, string> = { Injury: '伤病', Suspension: '停赛' };
+
+/** 伤病/停赛缺阵一行。无数据返回空串。 */
+function fmtInjuries(players: InjuryRow[]): string {
+  if (players.length === 0) return '';
+  return (
+    '伤病缺阵: ' +
+    players
+      .map((p) => {
+        const rz = REASON_ZH[p.reason] ?? p.reason;
+        return p.playerPos ? `${p.playerName}(${p.playerPos}/${rz})` : `${p.playerName}(${rz})`;
+      })
+      .join(', ')
+  );
+}
+
+/** 双队体能休息天数对比一行。两队都无数据返回空串。 */
+function fmtRest(homeDays: number | null, awayDays: number | null, homeName: string, awayName: string): string {
+  if (homeDays == null && awayDays == null) return '';
+  const h = homeDays != null ? `${homeName}休息${homeDays}天` : `${homeName}休息天数未知`;
+  const a = awayDays != null ? `${awayName}休息${awayDays}天` : `${awayName}休息天数未知`;
+  return `${h} / ${a}（体能差异）`;
+}
+
 /** 把一支队的可选真实表现块拼成缩进文本 (无数据则空)。 */
 function perfBlock(rec?: TeamRecord, stats?: StatAverages): string {
   const lines = [fmtRecord(rec), fmtStats(stats)].filter(Boolean).map((l) => `  ${l}`);
@@ -56,24 +82,33 @@ export function buildUserPrompt(args: {
   homeStats?: StatAverages;
   awayStats?: StatAverages;
   oddsLine?: string; // 市场赔率隐含概率 (有则作为强先验)
+  homeInjuries?: InjuryRow[];
+  awayInjuries?: InjuryRow[];
+  homeRestDays?: number | null;
+  awayRestDays?: number | null;
 }): string {
   const { home, away, homePlayers, awayPlayers, stage, baseline } = args;
   const factorLines = baseline.factors.map((f) => `  - ${f.label}: ${home.name} ${f.a} vs ${away.name} ${f.b}`).join('\n');
   const oddsBlock = args.oddsLine ? `\n\n【市场赔率隐含概率】\n  ${args.oddsLine}` : '';
 
+  const homeInjLine = fmtInjuries(args.homeInjuries ?? []);
+  const awayInjLine = fmtInjuries(args.awayInjuries ?? []);
+  const restLine = fmtRest(args.homeRestDays ?? null, args.awayRestDays ?? null, home.name, away.name);
+  const restBlock = restLine ? `\n\n【体能状况】\n  ${restLine}` : '';
+
   return `比赛: ${home.name}(主) vs ${away.name}(客)
 阶段: ${stage}
 
-【${home.name}】世界排名#${home.rank} 综合${home.ovr}(攻${home.att}/中${home.mid}/防${home.def}) 近期${home.form.join('')}${perfBlock(args.homeRecord, args.homeStats)}
+【${home.name}】世界排名#${home.rank} 综合${home.ovr}(攻${home.att}/中${home.mid}/防${home.def}) 近期${home.form.join('')}${perfBlock(args.homeRecord, args.homeStats)}${homeInjLine ? '\n  ' + homeInjLine : ''}
 核心球员:
 ${fmtPlayers(homePlayers) || '  - (无详细名单)'}
 
-【${away.name}】世界排名#${away.rank} 综合${away.ovr}(攻${away.att}/中${away.mid}/防${away.def}) 近期${away.form.join('')}${perfBlock(args.awayRecord, args.awayStats)}
+【${away.name}】世界排名#${away.rank} 综合${away.ovr}(攻${away.att}/中${away.mid}/防${away.def}) 近期${away.form.join('')}${perfBlock(args.awayRecord, args.awayStats)}${awayInjLine ? '\n  ' + awayInjLine : ''}
 核心球员:
 ${fmtPlayers(awayPlayers) || '  - (无详细名单)'}
 
 【实力对比】
-${factorLines}
+${factorLines}${restBlock}
 
 【基线模型(Elo)参考先验】
   胜平负: ${home.name}胜 ${baseline.odds.win}% / 平 ${baseline.odds.draw}% / ${away.name}胜 ${baseline.odds.loss}%

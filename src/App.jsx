@@ -12,6 +12,7 @@ import {
   PlayersScreen,
   PlayerDetailScreen,
 } from './screens/Screens.jsx';
+import { LotteryScreen, LotteryDetailScreen } from './screens/LotteryScreens.jsx';
 
 function StatusBar() {
   const [t, setT] = useState('');
@@ -30,6 +31,7 @@ function StatusBar() {
 
 function TabBar({ tab, onTab }) {
   const items = [
+    { k: 'lottery', label: '竞彩', ic: '🎲' },
     { k: 'matches', label: '赛程', ic: '⚽' },
     { k: 'teams', label: '球队', ic: '🛡️' },
     { k: 'players', label: '球员', ic: '👤' },
@@ -80,7 +82,15 @@ function Shell() {
   let content = <Splash error={error} apiBase={apiBase} />;
   const onBack = stack.length ? back : null;
 
-  if (ready) {
+  // 竞彩 tab 不依赖 DataProvider (独立拉 Firo 数据), 先处理
+  if (tab === 'lottery' && !cur) {
+    title = '竞彩分析'; sub = 'AI 辅助 · 全玩法';
+    content = <LotteryScreen onOpenMatch={(m) => push({ type: 'lottery', match: m })} />;
+  } else if (cur?.type === 'lottery') {
+    const mm = cur.match.matchMain;
+    title = `${mm.homeTeamName} vs ${mm.awayTeamName}`; sub = mm.matchNumStr;
+    content = <LotteryDetailScreen match={cur.match} />;
+  } else if (ready) {
     if (!cur) {
       if (tab === 'matches') { title = 'FIFA26'; sub = '2026 · 美加墨'; content = <MatchesScreen onOpenMatch={(m) => push({ type: 'match', match: m })} />; }
       if (tab === 'teams') { title = '球队分析'; sub = '48强实力数据'; content = <TeamsScreen onOpenTeam={(c) => push({ type: 'team', code: c })} />; }
@@ -95,6 +105,8 @@ function Shell() {
       title = '球员详情'; sub = cur.player.team.name;
       content = <PlayerDetailScreen player={cur.player} />;
     }
+  } else if (!ready && tab !== 'lottery') {
+    content = <Splash error={error} apiBase={apiBase} />;
   }
 
   return (
@@ -102,7 +114,7 @@ function Shell() {
       <StatusBar />
       <Header title={title} sub={sub} onBack={onBack} />
       {content}
-      {ready && !cur && <TabBar tab={tab} onTab={switchTab} />}
+      {(ready || tab === 'lottery') && !cur && <TabBar tab={tab} onTab={switchTab} />}
     </div>
   );
 }

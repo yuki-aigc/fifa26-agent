@@ -132,7 +132,76 @@ async function seed() {
   }
   console.log(`  · 写入 ${matchCount} 场比赛 (跳过 ${skipped} 场未定对阵的淘汰赛占位)`);
 
+  const fallbackCount = await ensureSquadDepth(11);
+  if (fallbackCount > 0) {
+    console.log(`  · 补齐 ${fallbackCount} 名开赛前阵容占位球员 (最终名单公布后用 FC26/真实名单覆盖)`);
+  }
+
   console.log('✅ 种子完成');
+}
+
+function clamp(n: number): number {
+  return Math.max(45, Math.min(92, Math.round(n)));
+}
+
+function fallbackAttrs(t: typeof teams.$inferSelect, pos: string): [number, number, number, number, number, number] {
+  if (pos === 'GK') return [clamp(t.def - 18), 30, clamp(t.mid - 8), clamp(t.def + 2), clamp(t.ovr), clamp(t.ovr)];
+  if (pos === 'DF') return [clamp(t.def - 2), clamp(t.att - 25), clamp(t.mid - 4), clamp(t.def), clamp(t.ovr + 1), clamp(t.def)];
+  if (pos === 'MF') return [clamp(t.mid - 3), clamp((t.att + t.mid) / 2 - 5), clamp(t.mid), clamp((t.mid + t.def) / 2), clamp(t.ovr + 2), clamp(t.mid)];
+  return [clamp(t.att), clamp(t.att + 1), clamp(t.mid - 2), clamp(t.def - 25), clamp(t.ovr + 1), clamp(t.att)];
+}
+
+async function ensureSquadDepth(minPerTeam: number): Promise<number> {
+  const teamRows = await db.select().from(teams);
+  const roles: [string, string, number][] = [
+    ['门将', 'GK', 1],
+    ['中卫', 'DF', 4],
+    ['边卫', 'DF', 2],
+    ['后防核心', 'DF', 5],
+    ['后腰', 'MF', 6],
+    ['中场核心', 'MF', 8],
+    ['组织核心', 'MF', 10],
+    ['边锋', 'FW', 11],
+    ['中锋', 'FW', 9],
+    ['前场核心', 'FW', 7],
+    ['轮换尖刀', 'FW', 19],
+  ];
+
+  let inserted = 0;
+  for (const t of teamRows) {
+    const squad = await db.select().from(players).where(eq(players.teamCode, t.code));
+    if (squad.length >= minPerTeam) continue;
+    const existingNames = new Set(squad.map((p) => p.name));
+    let count = squad.length;
+    for (const [role, pos, num] of roles) {
+      if (count >= minPerTeam) break;
+      const name = `${t.name}${role}`;
+      if (existingNames.has(name)) continue;
+      const [pace, shooting, passing, defending, stamina, ovr] = fallbackAttrs(t, pos);
+      await db
+        .insert(players)
+        .values({
+          teamCode: t.code,
+          name,
+          pos,
+          num,
+          age: 26,
+          club: '开赛前名单待公布',
+          pace,
+          shooting,
+          passing,
+          defending,
+          stamina,
+          ovr,
+          updatedAt: new Date(),
+        })
+        .onConflictDoNothing();
+      existingNames.add(name);
+      count++;
+      inserted++;
+    }
+  }
+  return inserted;
 }
 
 seed()

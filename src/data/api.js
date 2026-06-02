@@ -25,4 +25,8 @@ export const api = {
   matches: () => get('/api/matches').then((d) => d.matches),
   prediction: (id, { ai = false, refresh = false } = {}) =>
     get(`/api/matches/${id}/prediction?ai=${ai ? 1 : 0}${refresh ? '&refresh=1' : ''}`),
+
+  lotteryMatches: () => get('/api/lottery/matches').then((d) => d.matches),
+  lotteryMatch: (id) => get(`/api/lottery/matches/${id}`),
+  lotteryAnalysis: (id) => get(`/api/lottery/matches/${id}/analysis`),
 };

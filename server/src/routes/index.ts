@@ -6,6 +6,8 @@ import { getPrediction } from '../services/predictions.js';
 import { accuracySummary } from '../services/accuracy.js';
 import { aiInfo, aiKeyAvailable } from '../ai/pi.js';
 import { config } from '../config.js';
+import { fetchLotteryList, fetchLotteryOdds, fetchFootballInfo, firoAvailable } from '../ingest/sources/firoApi.js';
+import { analyzeLotteryMatch } from '../services/lotteryAnalysis.js';
 
 export async function registerRoutes(app: FastifyInstance) {
   app.get('/health', async () => ({
@@ -18,6 +20,7 @@ export async function registerRoutes(app: FastifyInstance) {
       mode: config.sync.mode,
       apiFootballKey: !!config.apiFootball.key,
     },
+    firo: { keyConfigured: firoAvailable() },
   }));
 
   /* ── Accuracy (预测对账) ── */
@@ -82,4 +85,41 @@ export async function registerRoutes(app: FastifyInstance) {
       return result;
     },
   );
+
+  /* ── Lottery (竞彩数据 via Firo API) ── */
+  app.get('/api/lottery/matches', async (_req, reply) => {
+    if (!firoAvailable()) return reply.code(503).send({ error: 'firo_not_configured' });
+    const matches = await fetchLotteryList();
+    return { matches };
+  });
+
+  app.get<{ Params: { id: string } }>('/api/lottery/matches/:id', async (req, reply) => {
+    if (!firoAvailable()) return reply.code(503).send({ error: 'firo_not_configured' });
+    const matchId = Number(req.params.id);
+    if (!matchId) return reply.code(400).send({ error: 'invalid_match_id' });
+    const [info, oddsHistory] = await Promise.all([
+      fetchFootballInfo(matchId),
+      fetchLotteryOdds(matchId),
+    ]);
+    return { matchId, info, oddsHistory };
+  });
+
+  app.get<{ Params: { id: string } }>('/api/lottery/matches/:id/analysis', async (req, reply) => {
+    if (!firoAvailable()) return reply.code(503).send({ error: 'firo_not_configured' });
+    const matchId = Number(req.params.id);
+    if (!matchId) return reply.code(400).send({ error: 'invalid_match_id' });
+
+    // 拉全量数据 (赛程列表 + 单场数据)
+    const [matches, info, oddsHistory] = await Promise.all([
+      fetchLotteryList(),
+      fetchFootballInfo(matchId),
+      fetchLotteryOdds(matchId),
+    ]);
+    const match = matches.find((m) => m.matchMain.matchId === matchId);
+    if (!match) return reply.code(404).send({ error: 'match_not_found_in_lottery_list' });
+
+    const result = await analyzeLotteryMatch(match, info, oddsHistory);
+    if (!result) return reply.code(503).send({ error: 'ai_not_available' });
+    return result;
+  });
 }

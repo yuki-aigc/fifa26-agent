@@ -9,8 +9,9 @@ import { getMatchWithTeams, matchView } from './matches.js';
 import { getSquad } from './teams.js';
 import { teamRecord } from './standings.js';
 import { realH2H } from './h2h.js';
-import { teamStatAverages } from './stats.js';
+import { teamStatAverages, getTeamRestDays } from './stats.js';
 import { latestOddsLine } from './odds.js';
+import { getMatchInjuries } from './injuries.js';
 
 function eloKeyFactors(fs: Factor[], home: Team, away: Team): string[] {
   return fs
@@ -107,12 +108,17 @@ export async function getPrediction(matchId: string, opts: { ai?: boolean; refre
   };
 
   // 真实表现因素 (供详情页展示 + AI 先验)。
-  const [homeRecord, awayRecord, homeStats, awayStats, oddsLine] = await Promise.all([
+  const [homeRecord, awayRecord, homeStats, awayStats, oddsLine,
+         homeInjuries, awayInjuries, homeRestDays, awayRestDays] = await Promise.all([
     teamRecord(home.code),
     teamRecord(away.code),
     teamStatAverages(home.code),
     teamStatAverages(away.code),
     latestOddsLine(matchId, home.name, away.name),
+    getMatchInjuries(matchId, home.code),
+    getMatchInjuries(matchId, away.code),
+    match.kickoff ? getTeamRestDays(home.code, match.kickoff) : Promise.resolve(null),
+    match.kickoff ? getTeamRestDays(away.code, match.kickoff) : Promise.resolve(null),
   ]);
 
   let prediction = eloPrediction(home, away, baseline);
@@ -137,6 +143,10 @@ export async function getPrediction(matchId: string, opts: { ai?: boolean; refre
         homeStats,
         awayStats,
         oddsLine: oddsLine?.text,
+        homeInjuries,
+        awayInjuries,
+        homeRestDays,
+        awayRestDays,
       });
       if (aiPred) {
         await writeCachedAi(matchId, aiPred);

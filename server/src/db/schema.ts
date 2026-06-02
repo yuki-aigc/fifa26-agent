@@ -102,6 +102,25 @@ export const matchStats = sqliteTable(
   }),
 );
 
+/* ── Injuries / Suspensions (per-match, per-team) ─────────── */
+export const injuries = sqliteTable(
+  'injuries',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    matchId: text('match_id').notNull().references(() => matches.id),
+    teamCode: text('team_code').notNull().references(() => teams.code),
+    playerName: text('player_name').notNull(),
+    reason: text('reason').notNull(), // 'Injury' | 'Suspension'
+    playerPos: text('player_pos'), // 'FW' | 'MF' | 'DF' | 'GK' | null
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    uniquePerPlayer: uniqueIndex('injuries_match_team_player_idx').on(t.matchId, t.teamCode, t.playerName),
+    byMatch: index('injuries_match_idx').on(t.matchId),
+    byTeam: index('injuries_team_idx').on(t.teamCode),
+  }),
+);
+
 /* ── Odds (1X2 market odds time series) ───────────────────── */
 export const odds = sqliteTable(
   'odds',
@@ -189,5 +208,6 @@ export type PlayerRow = typeof players.$inferSelect;
 export type MatchRow = typeof matches.$inferSelect;
 export type PredictionRow = typeof predictions.$inferSelect;
 export type MatchStatsRow = typeof matchStats.$inferSelect;
+export type InjuryRow = typeof injuries.$inferSelect;
 export type OddsRow = typeof odds.$inferSelect;
 export type H2hMatchRow = typeof h2hMatches.$inferSelect;

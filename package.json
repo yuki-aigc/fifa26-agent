@@ -5,7 +5,12 @@
   "type": "module",
   "description": "FIFA26 预测系统 · 动物之森风手机端原型 (React + Vite)",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently -n web,api -c cyan,green \"vite\" \"pnpm --dir server dev\"",
+    "dev:web": "vite",
+    "dev:api": "pnpm --dir server dev",
+    "seed": "pnpm --dir server seed",
+    "sync:ids": "pnpm --dir server sync:ids",
+    "sync:firo": "pnpm --dir server sync:firo",
     "build": "vite build",
     "preview": "vite preview"
   },
@@ -15,6 +20,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
     "vite": "^6.0.7"
   }
 }

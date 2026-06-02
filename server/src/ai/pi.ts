@@ -62,7 +62,20 @@ function buildCustomModel(): Model<Api> {
 
 /** 传给 completeSimple 的请求选项 (显式 key 覆盖)。 */
 export function aiRequestOptions(): SimpleStreamOptions {
-  return config.ai.apiKey ? { apiKey: config.ai.apiKey } : {};
+  return {
+    ...(config.ai.apiKey ? { apiKey: config.ai.apiKey } : {}),
+    // kimi / Qwen3 等 thinking 模型: tool_choice='required' 与 thinking 不兼容会导致 400。
+    // 仅注入 enable_thinking=false 来禁用 thinking，依靠系统提示约束模型调用工具。
+    onPayload: (payload) => {
+      if (payload && typeof payload === 'object') {
+        const p = payload as Record<string, unknown>;
+        if (p['tools']) {
+          p['enable_thinking'] = false;
+        }
+      }
+      return payload;
+    },
+  };
 }
 
 export const aiInfo = {

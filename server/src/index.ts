@@ -6,6 +6,7 @@ import cors from '@fastify/cors';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import { config } from './config.js';
+import { sqlite } from './db/client.js';
 import { registerRoutes } from './routes/index.js';
 import { startScheduler } from './ingest/scheduler.js';
 
@@ -31,6 +32,14 @@ async function main() {
   app.log.info(`🚀 API on http://${config.host}:${config.port}  ·  docs: /docs`);
 
   startScheduler(app.log); // 赛事期间的实时数据定时拉取 (SYNC_ENABLED)
+
+  const shutdown = async () => {
+    await app.close();
+    sqlite.close();
+    process.exit(0);
+  };
+  process.once('SIGTERM', () => void shutdown());
+  process.once('SIGINT', () => void shutdown());
 }
 
 main().catch((err) => {
