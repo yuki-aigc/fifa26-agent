@@ -16,6 +16,20 @@ function fmtKick(iso) {
   return { day: `${d.getMonth() + 1}月${d.getDate()}日`, time: `${pad(d.getHours())}:${pad(d.getMinutes())}` };
 }
 
+/* 赛事名 英->中 (历史交锋明细) */
+const COMP_ZH = {
+  'World Cup': '世界杯',
+  'Friendlies': '友谊赛',
+  'Copa America': '美洲杯',
+  'Euro Championship': '欧洲杯',
+  'UEFA Nations League': '欧国联',
+  'Africa Cup of Nations': '非洲杯',
+  'Asian Cup': '亚洲杯',
+  'CONCACAF Gold Cup': '金杯赛',
+  'Confederations Cup': '联合会杯',
+};
+const compLabel = (c) => COMP_ZH[c] || c || '比赛';
+
 /* 比较行 (双向对比条) */
 function CompareRow({ f }) {
   const total = f.pa + f.pb || 1;
@@ -243,12 +257,33 @@ export function MatchDetailScreen({ match, onOpenTeam }) {
 
       {/* 历史交锋 */}
       <SecH>历史交锋</SecH>
-      <div className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-around', textAlign: 'center' }}>
-        <div><div style={{ fontSize: 26, fontWeight: 900, color: '#11a89b' }}>{bl.h2h.aw}</div><div style={{ fontSize: 11, fontWeight: 800, color: '#9f927d' }}>{match.home.name}胜</div></div>
-        <div style={{ width: 2, height: 36, background: '#e6ddc6' }} />
-        <div><div style={{ fontSize: 26, fontWeight: 900, color: '#a07e08' }}>{bl.h2h.dr}</div><div style={{ fontSize: 11, fontWeight: 800, color: '#9f927d' }}>平</div></div>
-        <div style={{ width: 2, height: 36, background: '#e6ddc6' }} />
-        <div><div style={{ fontSize: 26, fontWeight: 900, color: '#e05a5a' }}>{bl.h2h.bw}</div><div style={{ fontSize: 11, fontWeight: 800, color: '#9f927d' }}>{match.away.name}胜</div></div>
+      <div className="card">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <span className={'chip ' + (pred.h2hReal ? 'mint' : 'yellow')} style={{ flex: 'none' }}>
+            {pred.h2hReal ? '✓ 真实交锋记录' : '模型估算'}
+          </span>
+          {pred.h2hReal && <span style={{ fontSize: 11, fontWeight: 800, color: '#9f927d' }}>共 {bl.h2h.total} 场</span>}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-around', textAlign: 'center' }}>
+          <div><div style={{ fontSize: 26, fontWeight: 900, color: '#11a89b' }}>{bl.h2h.aw}</div><div style={{ fontSize: 11, fontWeight: 800, color: '#9f927d' }}>{match.home.name}胜</div></div>
+          <div style={{ width: 2, height: 36, background: '#e6ddc6' }} />
+          <div><div style={{ fontSize: 26, fontWeight: 900, color: '#a07e08' }}>{bl.h2h.dr}</div><div style={{ fontSize: 11, fontWeight: 800, color: '#9f927d' }}>平</div></div>
+          <div style={{ width: 2, height: 36, background: '#e6ddc6' }} />
+          <div><div style={{ fontSize: 26, fontWeight: 900, color: '#e05a5a' }}>{bl.h2h.bw}</div><div style={{ fontSize: 11, fontWeight: 800, color: '#9f927d' }}>{match.away.name}胜</div></div>
+        </div>
+        {pred.h2hReal && pred.h2hRecent?.length > 0 && (
+          <div style={{ borderTop: '2px dashed #e6ddc6', marginTop: 14, paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 9 }}>
+            {pred.h2hRecent.map((m, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <span style={{ fontSize: 11, fontWeight: 800, color: '#9f927d', width: 64, flex: 'none' }}>{m.date}</span>
+                <span style={{ fontSize: 13, fontWeight: 800, color: '#794f27', textAlign: 'center', flex: 1 }}>
+                  {match.home.name} <b style={{ color: '#11a89b' }}>{m.homeGoals} - {m.awayGoals}</b> {match.away.name}
+                </span>
+                <span className="chip" style={{ flex: 'none', fontSize: 10, padding: '2px 8px' }}>{compLabel(m.competition)}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
