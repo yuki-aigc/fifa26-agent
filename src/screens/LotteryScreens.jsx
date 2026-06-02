@@ -9,7 +9,7 @@ const POOL_LABEL = { HAD: '胜平负', HHAD: '让球', HAFU: '半全场', TTG: '
 const POOL_CODES = ['HAD', 'HHAD', 'HAFU', 'TTG', 'CRS'];
 
 /* 赔率单元: value + 升降箭头 */
-function OddsCell({ label, value, flag, big }) {
+export function OddsCell({ label, value, flag, big }) {
   const rising = flag === 1, falling = flag === -1;
   const valColor = rising ? '#6fba2c' : falling ? '#e05a5a' : '#794f27';
   return (

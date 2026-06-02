@@ -6,6 +6,8 @@
 import { completeSimple, type Context } from '@earendil-works/pi-ai';
 import { resolveModel, aiKeyAvailable, aiInfo, aiRequestOptions } from '../ai/pi.js';
 import type { FiroMatchItem, FiroFootballInfo, FiroOddsHistory } from '../ingest/sources/firoApi.js';
+import { aiLogger } from '../observability/logger.js';
+import { recordAiAnalysis } from '../observability/metrics.js';
 
 export interface LotteryAnalysisResult {
   matchId: number;
@@ -111,14 +113,56 @@ const analysisToolDef = {
   },
 };
 
+interface LotteryAnalysisToolCall {
+  type: string;
+  name?: string;
+  arguments?: unknown;
+}
+
+export function parseLotteryAnalysisToolCall(
+  content: LotteryAnalysisToolCall[],
+  matchId: number,
+): LotteryAnalysisResult | null {
+  const call = content.find((c) => c.type === 'toolCall' && c.name === analysisToolDef.name);
+  if (!call || !call.arguments || typeof call.arguments !== 'object') return null;
+
+  const args = call.arguments as Record<string, unknown>;
+  return {
+    matchId,
+    suggestions: Array.isArray(args.suggestions) ? args.suggestions.slice(0, 5).map(String) : [],
+    recommendation: typeof args.recommendation === 'string' ? args.recommendation : '',
+    confidence: Math.max(0, Math.min(100, Math.round(Number(args.confidence ?? 50)))),
+    reasoning: typeof args.reasoning === 'string' ? args.reasoning : '',
+    model: aiInfo.model,
+    provider: aiInfo.provider,
+  };
+}
+
+function tokensUsed(result: unknown): number {
+  if (!result || typeof result !== 'object') return 0;
+  const usage = (result as { usage?: Record<string, unknown> }).usage;
+  if (!usage) return 0;
+  return Number(usage.totalTokens ?? usage.total_tokens ?? 0) || 0;
+}
+
 export async function analyzeLotteryMatch(
   match: FiroMatchItem,
   info: FiroFootballInfo,
   oddsHistory: FiroOddsHistory,
 ): Promise<LotteryAnalysisResult | null> {
-  if (!aiKeyAvailable()) return null;
+  const startedAt = Date.now();
+  const matchId = match.matchMain.matchId;
+  if (!aiKeyAvailable()) {
+    recordAiAnalysis(Date.now() - startedAt, false);
+    aiLogger.warn({ matchId }, 'ai_analysis_key_missing');
+    return null;
+  }
   const model = resolveModel();
-  if (!model) return null;
+  if (!model) {
+    recordAiAnalysis(Date.now() - startedAt, false);
+    aiLogger.warn({ matchId, provider: aiInfo.provider, model: aiInfo.model }, 'ai_analysis_model_unresolved');
+    return null;
+  }
 
   const context: Context = {
     systemPrompt: SYSTEM_PROMPT,
@@ -127,27 +171,21 @@ export async function analyzeLotteryMatch(
   };
 
   try {
+    aiLogger.info({ matchId, provider: aiInfo.provider, model: aiInfo.model }, 'ai_analysis_start');
     const result = await completeSimple(model, context, aiRequestOptions());
-    const call = result.content.find(
-      (c): c is Extract<typeof c, { type: 'toolCall' }> =>
-        c.type === 'toolCall' && c.name === analysisToolDef.name,
-    );
-    if (!call) {
-      console.warn('[lotteryAnalysis] 模型未调用分析工具');
+    const parsed = parseLotteryAnalysisToolCall(result.content as LotteryAnalysisToolCall[], matchId);
+    const durationMs = Date.now() - startedAt;
+    recordAiAnalysis(durationMs, !!parsed, tokensUsed(result));
+    if (!parsed) {
+      aiLogger.warn({ matchId, durationMs }, 'ai_analysis_tool_call_missing');
       return null;
     }
-    const a = call.arguments as Record<string, unknown>;
-    return {
-      matchId: match.matchMain.matchId,
-      suggestions: Array.isArray(a.suggestions) ? a.suggestions.slice(0, 5).map(String) : [],
-      recommendation: typeof a.recommendation === 'string' ? a.recommendation : '',
-      confidence: Math.max(0, Math.min(100, Math.round(Number(a.confidence ?? 50)))),
-      reasoning: typeof a.reasoning === 'string' ? a.reasoning : '',
-      model: aiInfo.model,
-      provider: aiInfo.provider,
-    };
+    aiLogger.info({ matchId, durationMs, confidence: parsed.confidence }, 'ai_analysis_done');
+    return parsed;
   } catch (err) {
-    console.warn('[lotteryAnalysis] 分析失败:', (err as Error).message);
+    const durationMs = Date.now() - startedAt;
+    recordAiAnalysis(durationMs, false);
+    aiLogger.error({ matchId, durationMs, err }, 'ai_analysis_failed');
     return null;
   }
 }

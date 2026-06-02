@@ -6,22 +6,52 @@ import { getPrediction } from '../services/predictions.js';
 import { accuracySummary } from '../services/accuracy.js';
 import { aiInfo, aiKeyAvailable } from '../ai/pi.js';
 import { config } from '../config.js';
+import { sqlite } from '../db/client.js';
 import { fetchLotteryList, fetchLotteryOdds, fetchFootballInfo, firoAvailable } from '../ingest/sources/firoApi.js';
 import { analyzeLotteryMatch } from '../services/lotteryAnalysis.js';
+import { addLotteryMatchesServed, metricsSnapshot } from '../observability/metrics.js';
+import { evaluateAlertStatus } from '../observability/alerts.js';
 
 export async function registerRoutes(app: FastifyInstance) {
-  app.get('/health', async () => ({
-    ok: true,
-    time: new Date().toISOString(),
-    ai: { provider: aiInfo.provider, model: aiInfo.model, baseUrl: aiInfo.baseUrl, keyConfigured: aiKeyAvailable() },
-    sync: {
-      enabled: config.sync.enabled,
-      intervalMin: config.sync.intervalMin,
-      mode: config.sync.mode,
-      apiFootballKey: !!config.apiFootball.key,
-    },
-    firo: { keyConfigured: firoAvailable() },
-  }));
+  app.get('/health', async () => {
+    let dbOk = true;
+    try {
+      sqlite.prepare('select 1 as ok').get();
+    } catch {
+      dbOk = false;
+    }
+    const metrics = metricsSnapshot();
+
+    return {
+      ok: dbOk,
+      status: dbOk ? 'ok' : 'degraded',
+      version: '1.0.0',
+      time: new Date().toISOString(),
+      uptimeSeconds: Math.round(process.uptime()),
+      checks: {
+        database: dbOk ? 'ok' : 'failed',
+        firoConfigured: firoAvailable(),
+        aiConfigured: aiKeyAvailable(),
+      },
+      ai: { provider: aiInfo.provider, model: aiInfo.model, baseUrl: aiInfo.baseUrl, keyConfigured: aiKeyAvailable() },
+      sync: {
+        enabled: config.sync.enabled,
+        intervalMin: config.sync.intervalMin,
+        mode: config.sync.mode,
+        apiFootballKey: !!config.apiFootball.key,
+      },
+      firo: { keyConfigured: firoAvailable() },
+      metrics: {
+        uptime_seconds: metrics.uptime_seconds,
+        memory_rss_mb: metrics.memory_rss_mb,
+      },
+    };
+  });
+
+  app.get('/api/metrics', async () => {
+    const metrics = metricsSnapshot();
+    return { ...metrics, alerts: evaluateAlertStatus(metrics) };
+  });
 
   /* ── Accuracy (预测对账) ── */
   app.get('/api/accuracy', async () => {
@@ -90,6 +120,7 @@ export async function registerRoutes(app: FastifyInstance) {
   app.get('/api/lottery/matches', async (_req, reply) => {
     if (!firoAvailable()) return reply.code(503).send({ error: 'firo_not_configured' });
     const matches = await fetchLotteryList();
+    addLotteryMatchesServed(matches.length);
     return { matches };
   });
 

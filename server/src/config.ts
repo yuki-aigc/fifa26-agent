@@ -30,6 +30,13 @@ export const config = {
     privateKey: env('FIRO_PRIVATE_KEY'), // PKCS#8 DER base64
   },
 
+  observability: {
+    logLevel: env('LOG_LEVEL', 'info'),
+    feishuWebhookUrl: env('FEISHU_WEBHOOK_URL'),
+    alertFiroErrorRate: Number(env('ALERT_FIRO_ERROR_RATE', '0.3')),
+    alertAiDurationMs: Number(env('ALERT_AI_DURATION_MS', '12000')),
+  },
+
   // server 内置定时同步 (赛事期间开启)。需 API_FOOTBALL_KEY 才会真正运行。
   sync: {
     enabled: env('SYNC_ENABLED', 'false') === 'true',

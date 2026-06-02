@@ -6,6 +6,8 @@
    =========================================================== */
 import { createSign, createPrivateKey, type KeyObject } from 'node:crypto';
 import { config } from '../../config.js';
+import { firoLogger } from '../../observability/logger.js';
+import { recordFiroRequest } from '../../observability/metrics.js';
 
 const BASE = 'https://www.firoapi.com';
 
@@ -28,6 +30,15 @@ function rsaSign(str: string): string {
   return createSign('SHA256').update(str).sign(getPrivKey(), 'base64');
 }
 
+export function buildFiroSignString(
+  apiKey: string,
+  timestamp: string,
+  params: Record<string, string | number> = {},
+): string {
+  const sortedParams = Object.keys(params).sort().map(k => `${k}=${params[k]}`).join('&');
+  return `apiKey=${apiKey}&timestamp=${timestamp}` + (sortedParams ? `&${sortedParams}` : '');
+}
+
 /**
  * 通用 GET 请求。
  * signParams: 需要参与签名的参数 (按文档，必填参数入签名，可选参数不入)。
@@ -41,27 +52,40 @@ async function firoGet<T>(
   if (!config.firo.apiKey) throw new Error('FIRO_API_KEY 未配置');
 
   const ts = Date.now().toString();
-  const sortedSign = Object.keys(signParams).sort().map(k => `${k}=${signParams[k]}`).join('&');
-  const signStr = `apiKey=${config.firo.apiKey}&timestamp=${ts}` + (sortedSign ? `&${sortedSign}` : '');
+  const signStr = buildFiroSignString(config.firo.apiKey, ts, signParams);
   const sig = rsaSign(signStr);
 
   const qs = Object.keys(queryParams).sort().map(k => `${k}=${encodeURIComponent(queryParams[k])}`).join('&');
   const url = `${BASE}${path}${qs ? '?' + qs : ''}`;
+  const startedAt = Date.now();
+  let recorded = false;
 
-  const res = await fetch(url, {
-    headers: {
-      'X-API-Key': config.firo.apiKey,
-      'X-Signature': sig,
-      'X-Timestamp': ts,
-      'Accept': 'application/json',
-    },
-  });
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'X-API-Key': config.firo.apiKey,
+        'X-Signature': sig,
+        'X-Timestamp': ts,
+        'Accept': 'application/json',
+      },
+    });
 
-  const json = (await res.json()) as { code: number; message: string; data: T };
-  if (json.code !== 200 || json.data == null) {
-    throw new Error(`Firo API [${path}] 失败: ${json.message} (code=${json.code})`);
+    const json = (await res.json()) as { code: number; message: string; data: T };
+    const ok = res.ok && json.code === 200 && json.data != null;
+    const durationMs = Date.now() - startedAt;
+    recordFiroRequest(durationMs, ok);
+    recorded = true;
+    firoLogger.info({ path, statusCode: res.status, code: json.code, durationMs }, 'firo_request');
+    if (!ok) {
+      throw new Error(`Firo API [${path}] 失败: ${json.message} (code=${json.code})`);
+    }
+    return json.data;
+  } catch (err) {
+    const durationMs = Date.now() - startedAt;
+    if (!recorded) recordFiroRequest(durationMs, false);
+    firoLogger.error({ path, durationMs, err }, 'firo_request_failed');
+    throw err;
   }
-  return json.data;
 }
 
 /* ══════════════════════════════════════════════════════════
