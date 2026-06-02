@@ -3,6 +3,8 @@ import { db } from '../db/client.js';
 import { matches } from '../db/schema.js';
 import type { Match } from '../domain/types.js';
 import { getTeamRow } from './teams.js';
+import { getMatchStats } from './stats.js';
+import { getLatestOdds } from './odds.js';
 
 export function teamMini(t: { code: string; name: string; en: string; flagEmoji: string | null; accent: string; ovr: number }) {
   return { code: t.code, name: t.name, en: t.en, flagEmoji: t.flagEmoji, accent: t.accent, ovr: t.ovr };
@@ -38,9 +40,22 @@ export function matchView(match: Match, home: { code: string; name: string; en: 
     venue: match.venue,
     kickoff: match.kickoff,
     status: match.status,
+    elapsed: match.elapsed, // 比赛进行分钟 (live)
     homeScore: match.homeScore,
     awayScore: match.awayScore,
     home: teamMini(home),
     away: teamMini(away),
+  };
+}
+
+/** 单场详情 = 基础视图 + 双方表现数据 + 最新赔率 (供详情页/iOS)。 */
+export async function matchDetail(id: string) {
+  const mwt = await getMatchWithTeams(id);
+  if (!mwt) return undefined;
+  const [stats, latestOdds] = await Promise.all([getMatchStats(id), getLatestOdds(id)]);
+  return {
+    ...matchView(mwt.match, mwt.home, mwt.away),
+    stats, // match_stats 行 (主队在前), 无数据为 []
+    odds: latestOdds, // 最新盘口 + 隐含概率, 无则 null
   };
 }

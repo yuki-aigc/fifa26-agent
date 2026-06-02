@@ -14,7 +14,8 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "seed": "tsx src/ingest/seed.ts",
-    "sync": "tsx src/ingest/sync.ts"
+    "sync": "tsx src/ingest/sync.ts",
+    "h2h": "tsx src/ingest/h2h.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.78.0",

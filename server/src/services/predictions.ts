@@ -7,6 +7,10 @@ import { predictWithAI, type Baseline } from '../ai/predictor.js';
 import { aiInfo } from '../ai/pi.js';
 import { getMatchWithTeams, matchView } from './matches.js';
 import { getSquad } from './teams.js';
+import { teamRecord } from './standings.js';
+import { realH2H } from './h2h.js';
+import { teamStatAverages } from './stats.js';
+import { latestOddsLine } from './odds.js';
 
 function eloKeyFactors(fs: Factor[], home: Team, away: Team): string[] {
   return fs
@@ -93,12 +97,23 @@ export async function getPrediction(matchId: string, opts: { ai?: boolean; refre
   if (!mwt) return undefined;
   const { match, home, away } = mwt;
 
+  // 真实交锋优先 (跨届历史 + 本届已结束对阵), 无则回退 Elo 合成值。
+  const real = await realH2H(home.code, away.code);
   const baseline: Baseline = {
     odds: odds(home, away),
     score: score(home, away),
     factors: factors(home, away),
-    h2h: h2h(home, away),
+    h2h: real.real ? { total: real.total, aw: real.aw, dr: real.dr, bw: real.bw } : h2h(home, away),
   };
+
+  // 真实表现因素 (供详情页展示 + AI 先验)。
+  const [homeRecord, awayRecord, homeStats, awayStats, oddsLine] = await Promise.all([
+    teamRecord(home.code),
+    teamRecord(away.code),
+    teamStatAverages(home.code),
+    teamStatAverages(away.code),
+    latestOddsLine(matchId, home.name, away.name),
+  ]);
 
   let prediction = eloPrediction(home, away, baseline);
   let usedAi = false;
@@ -110,7 +125,19 @@ export async function getPrediction(matchId: string, opts: { ai?: boolean; refre
       usedAi = true;
     } else {
       const [homePlayers, awayPlayers] = await Promise.all([getSquad(home.code), getSquad(away.code)]);
-      const aiPred = await predictWithAI({ home, away, homePlayers, awayPlayers, stage: match.stage, baseline });
+      const aiPred = await predictWithAI({
+        home,
+        away,
+        homePlayers,
+        awayPlayers,
+        stage: match.stage,
+        baseline,
+        homeRecord,
+        awayRecord,
+        homeStats,
+        awayStats,
+        oddsLine: oddsLine?.text,
+      });
       if (aiPred) {
         await writeCachedAi(matchId, aiPred);
         prediction = aiPred;
@@ -123,6 +150,12 @@ export async function getPrediction(matchId: string, opts: { ai?: boolean; refre
     match: matchView(match, home, away),
     baseline,
     prediction,
+    // 真实表现数据 (前端/iOS 可直接消费)
+    records: { home: homeRecord, away: awayRecord },
+    teamStats: { home: homeStats, away: awayStats },
+    h2hReal: real.real,
+    h2hRecent: real.recent, // 最近交锋 (含日期/赛事/比分)
+    odds: oddsLine?.odds ?? null,
     ai: usedAi,
     aiRequested: !!opts.ai,
     aiFallback: !!opts.ai && !usedAi, // 请求了 AI 但回退到 Elo (无 key/失败)

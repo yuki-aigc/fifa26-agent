@@ -24,6 +24,15 @@ export const config = {
     leagueId: env('API_FOOTBALL_LEAGUE_ID', '1'),
     season: env('API_FOOTBALL_SEASON', '2026'),
   },
+
+  // server 内置定时同步 (赛事期间开启)。需 API_FOOTBALL_KEY 才会真正运行。
+  sync: {
+    enabled: env('SYNC_ENABLED', 'false') === 'true',
+    intervalMin: Number(env('SYNC_INTERVAL_MIN', '5')),
+    mode: env('SYNC_MODE', 'live') as 'full' | 'live', // live=仅进行中(省额度) / full=全季
+    stats: env('SYNC_STATS', 'true') === 'true',
+    odds: env('SYNC_ODDS', 'true') === 'true',
+  },
 } as const;
 
 export type Config = typeof config;

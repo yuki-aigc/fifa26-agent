@@ -7,6 +7,7 @@ import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import { config } from './config.js';
 import { registerRoutes } from './routes/index.js';
+import { startScheduler } from './ingest/scheduler.js';
 
 async function main() {
   const app = Fastify({ logger: { transport: undefined, level: 'info' } });
@@ -28,6 +29,8 @@ async function main() {
 
   await app.listen({ port: config.port, host: config.host });
   app.log.info(`🚀 API on http://${config.host}:${config.port}  ·  docs: /docs`);
+
+  startScheduler(app.log); // 赛事期间的实时数据定时拉取 (SYNC_ENABLED)
 }
 
 main().catch((err) => {

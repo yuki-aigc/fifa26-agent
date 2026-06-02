@@ -5,6 +5,8 @@
    =========================================================== */
 import { completeSimple, type Context, type ToolCall } from '@earendil-works/pi-ai';
 import type { Team, Player, Prediction, Odds, ScorePrediction, Factor, H2H } from '../domain/types.js';
+import type { TeamRecord } from '../services/standings.js';
+import type { StatAverages } from '../services/stats.js';
 import { resolveModel, aiKeyAvailable, aiInfo, aiRequestOptions } from './pi.js';
 import { predictMatchTool, type PredictMatchArgs } from './predictTool.js';
 import { SYSTEM_PROMPT, buildUserPrompt } from './prompt.js';
@@ -39,6 +41,11 @@ export async function predictWithAI(args: {
   awayPlayers: Player[];
   stage: string;
   baseline: Baseline;
+  homeRecord?: TeamRecord;
+  awayRecord?: TeamRecord;
+  homeStats?: StatAverages;
+  awayStats?: StatAverages;
+  oddsLine?: string;
 }): Promise<Prediction | null> {
   if (!aiKeyAvailable()) return null;
   const model = resolveModel();

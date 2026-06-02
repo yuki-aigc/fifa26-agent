@@ -1,16 +1,30 @@
 import type { FastifyInstance } from 'fastify';
 import { listTeams, getTeamDetail } from '../services/teams.js';
 import { listPlayers, getPlayer } from '../services/players.js';
-import { listMatches, getMatchWithTeams, matchView } from '../services/matches.js';
+import { listMatches, getMatchWithTeams, matchView, matchDetail } from '../services/matches.js';
 import { getPrediction } from '../services/predictions.js';
+import { accuracySummary } from '../services/accuracy.js';
 import { aiInfo, aiKeyAvailable } from '../ai/pi.js';
+import { config } from '../config.js';
 
 export async function registerRoutes(app: FastifyInstance) {
   app.get('/health', async () => ({
     ok: true,
     time: new Date().toISOString(),
     ai: { provider: aiInfo.provider, model: aiInfo.model, baseUrl: aiInfo.baseUrl, keyConfigured: aiKeyAvailable() },
+    sync: {
+      enabled: config.sync.enabled,
+      intervalMin: config.sync.intervalMin,
+      mode: config.sync.mode,
+      apiFootballKey: !!config.apiFootball.key,
+    },
   }));
+
+  /* ── Accuracy (预测对账) ── */
+  app.get('/api/accuracy', async () => {
+    const summary = await accuracySummary();
+    return { summary };
+  });
 
   /* ── Teams ── */
   app.get('/api/teams', async () => {
@@ -52,9 +66,9 @@ export async function registerRoutes(app: FastifyInstance) {
   });
 
   app.get<{ Params: { id: string } }>('/api/matches/:id', async (req, reply) => {
-    const mwt = await getMatchWithTeams(req.params.id);
-    if (!mwt) return reply.code(404).send({ error: 'match_not_found' });
-    return matchView(mwt.match, mwt.home, mwt.away);
+    const detail = await matchDetail(req.params.id);
+    if (!detail) return reply.code(404).send({ error: 'match_not_found' });
+    return detail;
   });
 
   /* ── Prediction (Elo baseline + optional AI) ── */

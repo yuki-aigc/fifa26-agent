@@ -11,6 +11,7 @@ export const teams = sqliteTable('teams', {
   flagEmoji: text('flag_emoji'),
   accent: text('accent').notNull().default('#19c8b9'),
   rank: integer('rank').notNull().default(99),
+  apiId: integer('api_id'), // API-Football team id (用于 H2H / 实时对齐)
   fifaPoints: real('fifa_points').notNull().default(0),
   ovr: integer('ovr').notNull().default(75),
   att: integer('att').notNull().default(75),
@@ -61,6 +62,7 @@ export const matches = sqliteTable(
     venue: text('venue').notNull().default(''),
     kickoff: integer('kickoff', { mode: 'timestamp_ms' }), // UTC kickoff
     status: text('status').notNull().default('scheduled'), // scheduled | live | finished
+    elapsed: integer('elapsed'), // 比赛进行分钟 (live only)
     homeScore: integer('home_score'),
     awayScore: integer('away_score'),
     externalId: text('external_id'), // api-football fixture id
@@ -69,6 +71,52 @@ export const matches = sqliteTable(
   (t) => ({
     byKickoff: index('matches_kickoff_idx').on(t.kickoff),
     byGroup: index('matches_group_idx').on(t.group),
+    byStatus: index('matches_status_idx').on(t.status),
+    byExternal: index('matches_external_idx').on(t.externalId),
+  }),
+);
+
+/* ── Match stats (per-team performance, for AI + history) ── */
+export const matchStats = sqliteTable(
+  'match_stats',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    matchId: text('match_id').notNull().references(() => matches.id),
+    teamCode: text('team_code').notNull().references(() => teams.code),
+    isHome: integer('is_home', { mode: 'boolean' }).notNull(),
+    goals: integer('goals'), // 进球 (冗余存,便于派生战绩)
+    possession: real('possession'), // 控球率 %
+    shots: integer('shots'),
+    shotsOnTarget: integer('shots_on_target'),
+    xg: real('xg'), // 预期进球
+    corners: integer('corners'),
+    fouls: integer('fouls'),
+    yellow: integer('yellow'),
+    red: integer('red'),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    uniquePerTeam: uniqueIndex('match_stats_match_team_idx').on(t.matchId, t.teamCode),
+    byMatch: index('match_stats_match_idx').on(t.matchId),
+    byTeam: index('match_stats_team_idx').on(t.teamCode),
+  }),
+);
+
+/* ── Odds (1X2 market odds time series) ───────────────────── */
+export const odds = sqliteTable(
+  'odds',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    matchId: text('match_id').notNull().references(() => matches.id),
+    bookmaker: text('bookmaker').notNull().default(''),
+    homeWin: real('home_win').notNull(), // decimal odds
+    draw: real('draw').notNull(),
+    awayWin: real('away_win').notNull(),
+    capturedAt: integer('captured_at', { mode: 'timestamp_ms' }).notNull().default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    byMatch: index('odds_match_idx').on(t.matchId),
+    byCapture: index('odds_capture_idx').on(t.matchId, t.capturedAt),
   }),
 );
 
@@ -90,9 +138,49 @@ export const predictions = sqliteTable(
     keyFactors: text('key_factors', { mode: 'json' }).$type<string[]>().notNull().default(sql`'[]'`),
     reasoning: text('reasoning').notNull().default(''),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().default(sql`(unixepoch() * 1000)`),
+    // ── 对账 (比赛结束后回填) ──
+    correctOutcome: integer('correct_outcome', { mode: 'boolean' }), // 胜平负是否命中
+    correctScore: integer('correct_score', { mode: 'boolean' }), // 精确比分是否命中
+    gradedAt: integer('graded_at', { mode: 'timestamp_ms' }),
   },
   (t) => ({
     uniqueCache: uniqueIndex('predictions_cache_idx').on(t.matchId, t.engine, t.model),
+  }),
+);
+
+/* ── Head-to-head (真实历史交锋) ──────────────────────────
+   规范化存储: aCode < bCode (字典序), 读取时按主队视角翻转。
+   来源 API-Football /fixtures/headtohead。 */
+export const h2hMatches = sqliteTable(
+  'h2h_matches',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    aCode: text('a_code').notNull().references(() => teams.code), // 规范化较小 code
+    bCode: text('b_code').notNull().references(() => teams.code),
+    playedOn: text('played_on').notNull(), // YYYY-MM-DD
+    aScore: integer('a_score').notNull(),
+    bScore: integer('b_score').notNull(),
+    competition: text('competition').notNull().default(''),
+    externalId: text('external_id'), // api-football fixture id (去重用)
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    byPair: index('h2h_pair_idx').on(t.aCode, t.bCode),
+    uniqueFixture: uniqueIndex('h2h_fixture_idx').on(t.externalId),
+  }),
+);
+
+/* ── H2H 抓取登记 (避免重复打接口, 区分"已查无交锋"与"未查") ── */
+export const h2hPairs = sqliteTable(
+  'h2h_pairs',
+  {
+    aCode: text('a_code').notNull().references(() => teams.code),
+    bCode: text('b_code').notNull().references(() => teams.code),
+    fetchedAt: integer('fetched_at', { mode: 'timestamp_ms' }).notNull().default(sql`(unixepoch() * 1000)`),
+    meetings: integer('meetings').notNull().default(0),
+  },
+  (t) => ({
+    pk: uniqueIndex('h2h_pairs_pk').on(t.aCode, t.bCode),
   }),
 );
 
@@ -100,3 +188,6 @@ export type TeamRow = typeof teams.$inferSelect;
 export type PlayerRow = typeof players.$inferSelect;
 export type MatchRow = typeof matches.$inferSelect;
 export type PredictionRow = typeof predictions.$inferSelect;
+export type MatchStatsRow = typeof matchStats.$inferSelect;
+export type OddsRow = typeof odds.$inferSelect;
+export type H2hMatchRow = typeof h2hMatches.$inferSelect;
