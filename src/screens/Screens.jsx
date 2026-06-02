@@ -6,7 +6,7 @@ import { useState, useEffect } from 'react';
 import { useData } from '../data/store.jsx';
 import { api } from '../data/api.js';
 import { odds } from '../data/elo.js';
-import { FlagBadge, StatBar, ProbBar, FormDots, Radar, SecH, OvrBadge } from '../components/ui.jsx';
+import { FlagBadge, StatBar, ProbBar, FormDots, Radar, SecH, OvrBadge, H2HChart } from '../components/ui.jsx';
 
 /* 开赛时间格式化 (本地时区) */
 function fmtKick(iso) {
@@ -255,36 +255,21 @@ export function MatchDetailScreen({ match, onOpenTeam }) {
         {bl.factors.map((f, i) => <CompareRow key={i} f={f} />)}
       </div>
 
-      {/* 历史交锋 */}
+      {/* 历史交锋 对阵图 */}
       <SecH>历史交锋</SecH>
-      <div className="card">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-          <span className={'chip ' + (pred.h2hReal ? 'mint' : 'yellow')} style={{ flex: 'none' }}>
-            {pred.h2hReal ? '✓ 真实交锋记录' : '模型估算'}
-          </span>
-          {pred.h2hReal && <span style={{ fontSize: 11, fontWeight: 800, color: '#9f927d' }}>共 {bl.h2h.total} 场</span>}
+      <H2HChart
+        home={match.home}
+        away={match.away}
+        h2h={bl.h2h}
+        recent={pred.h2hRecent || []}
+        real={pred.h2hReal}
+        compLabel={compLabel}
+      />
+      {!pred.h2hReal && (
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#9f927d', textAlign: 'center', marginTop: -6, marginBottom: 4 }}>
+          ⓘ 暂无真实交锋数据,以上为模型估算
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-around', textAlign: 'center' }}>
-          <div><div style={{ fontSize: 26, fontWeight: 900, color: '#11a89b' }}>{bl.h2h.aw}</div><div style={{ fontSize: 11, fontWeight: 800, color: '#9f927d' }}>{match.home.name}胜</div></div>
-          <div style={{ width: 2, height: 36, background: '#e6ddc6' }} />
-          <div><div style={{ fontSize: 26, fontWeight: 900, color: '#a07e08' }}>{bl.h2h.dr}</div><div style={{ fontSize: 11, fontWeight: 800, color: '#9f927d' }}>平</div></div>
-          <div style={{ width: 2, height: 36, background: '#e6ddc6' }} />
-          <div><div style={{ fontSize: 26, fontWeight: 900, color: '#e05a5a' }}>{bl.h2h.bw}</div><div style={{ fontSize: 11, fontWeight: 800, color: '#9f927d' }}>{match.away.name}胜</div></div>
-        </div>
-        {pred.h2hReal && pred.h2hRecent?.length > 0 && (
-          <div style={{ borderTop: '2px dashed #e6ddc6', marginTop: 14, paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 9 }}>
-            {pred.h2hRecent.map((m, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                <span style={{ fontSize: 11, fontWeight: 800, color: '#9f927d', width: 64, flex: 'none' }}>{m.date}</span>
-                <span style={{ fontSize: 13, fontWeight: 800, color: '#794f27', textAlign: 'center', flex: 1 }}>
-                  {match.home.name} <b style={{ color: '#11a89b' }}>{m.homeGoals} - {m.awayGoals}</b> {match.away.name}
-                </span>
-                <span className="chip" style={{ flex: 'none', fontSize: 10, padding: '2px 8px' }}>{compLabel(m.competition)}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      )}
 
       <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
         <button className="btn btn-primary" style={{ flex: 1 }} onClick={() => onOpenTeam(match.home.code)}>{match.home.name}数据</button>
