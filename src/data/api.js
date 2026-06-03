@@ -4,29 +4,29 @@
    =========================================================== */
 const BASE = (import.meta.env.VITE_API_BASE || 'http://localhost:8787').replace(/\/$/, '');
 
-async function get(path) {
-  const res = await fetch(BASE + path);
+async function get(path, opts = {}) {
+  const res = await fetch(BASE + path, opts.signal ? { signal: opts.signal } : undefined);
   if (!res.ok) throw new Error(`${path} -> HTTP ${res.status}`);
   return res.json();
 }
 
 export const api = {
   base: BASE,
-  health: () => get('/health'),
-  teams: () => get('/api/teams').then((d) => d.teams),
-  team: (code) => get(`/api/teams/${code}`),
+  health: (opts) => get('/health', opts),
+  teams: (opts) => get('/api/teams', opts).then((d) => d.teams),
+  team: (code, opts) => get(`/api/teams/${code}`, opts),
   players: (opts = {}) => {
     const q = new URLSearchParams();
     if (opts.position) q.set('position', opts.position);
     if (opts.limit) q.set('limit', String(opts.limit));
     const qs = q.toString();
-    return get('/api/players' + (qs ? `?${qs}` : '')).then((d) => d.players);
+    return get('/api/players' + (qs ? `?${qs}` : ''), opts).then((d) => d.players);
   },
-  matches: () => get('/api/matches').then((d) => d.matches),
-  prediction: (id, { ai = false, refresh = false } = {}) =>
-    get(`/api/matches/${id}/prediction?ai=${ai ? 1 : 0}${refresh ? '&refresh=1' : ''}`),
+  matches: (opts) => get('/api/matches', opts).then((d) => d.matches),
+  prediction: (id, { ai = false, refresh = false, signal } = {}) =>
+    get(`/api/matches/${id}/prediction?ai=${ai ? 1 : 0}${refresh ? '&refresh=1' : ''}`, { signal }),
 
-  lotteryMatches: () => get('/api/lottery/matches').then((d) => d.matches),
-  lotteryMatch: (id) => get(`/api/lottery/matches/${id}`),
-  lotteryAnalysis: (id) => get(`/api/lottery/matches/${id}/analysis`),
+  lotteryMatches: (opts) => get('/api/lottery/matches', opts).then((d) => d.matches),
+  lotteryMatch: (id, opts) => get(`/api/lottery/matches/${id}`, opts),
+  lotteryAnalysis: (id, opts) => get(`/api/lottery/matches/${id}/analysis`, opts),
 };

@@ -48,7 +48,7 @@ function TabBar({ tab, onTab }) {
   );
 }
 
-function Splash({ error, apiBase }) {
+function Splash({ error, apiBase, onRetry, message = '加载FIFA26数据中…' }) {
   return (
     <div className="screen" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, textAlign: 'center' }}>
       <div style={{ fontSize: 44 }}>{error ? '⚠️' : '⚽'}</div>
@@ -57,16 +57,30 @@ function Splash({ error, apiBase }) {
           <div style={{ fontWeight: 900, fontSize: 16, color: '#e05a5a' }}>无法连接后端</div>
           <div style={{ fontSize: 12, fontWeight: 700, color: '#9f927d', maxWidth: 280 }}>{error}</div>
           <div style={{ fontSize: 11, color: '#c4b89e', marginTop: 4 }}>API: {apiBase}<br />请确认后端已启动 (cd server &amp;&amp; pnpm dev)</div>
+          {onRetry && <button className="btn btn-mint" onClick={onRetry}>重试</button>}
         </>
       ) : (
-        <div style={{ fontWeight: 800, fontSize: 14, color: '#9f927d' }}>加载FIFA26数据中…</div>
+        <div style={{ fontWeight: 800, fontSize: 14, color: '#9f927d' }}>{message}</div>
       )}
     </div>
   );
 }
 
 function Shell() {
-  const { byCode, loading, error, apiBase } = useData();
+  const {
+    byCode,
+    coreReady,
+    playersReady,
+    coreError,
+    playersError,
+    coreStatus,
+    playersStatus,
+    apiBase,
+    loadCore,
+    loadPlayers,
+    retryCore,
+    retryPlayers,
+  } = useData();
   const [tab, setTab] = useState('matches');
   const [stack, setStack] = useState([]);
 
@@ -75,11 +89,18 @@ function Shell() {
   const switchTab = (k) => { setTab(k); setStack([]); };
 
   const cur = stack[stack.length - 1] || null;
-  const ready = !loading && !error && byCode;
+  const needsCore = tab !== 'lottery' || cur?.type === 'match' || cur?.type === 'team' || cur?.type === 'player';
+  const needsPlayers = cur?.type === 'team' || cur?.type === 'player' || tab === 'players';
+  const ready = !needsCore || coreReady;
+
+  useEffect(() => {
+    if (needsCore) loadCore();
+    if (needsPlayers) loadPlayers();
+  }, [needsCore, needsPlayers, loadCore, loadPlayers]);
 
   let title = 'FIFA26';
   let sub = '2026 · 美加墨';
-  let content = <Splash error={error} apiBase={apiBase} />;
+  let content = <Splash apiBase={apiBase} />;
   const onBack = stack.length ? back : null;
 
   // 竞彩 tab 不依赖 DataProvider (独立拉 Firo 数据), 先处理
@@ -90,6 +111,15 @@ function Shell() {
     const mm = cur.match.matchMain;
     title = `${mm.homeTeamName} vs ${mm.awayTeamName}`; sub = mm.matchNumStr;
     content = <LotteryDetailScreen match={cur.match} />;
+  } else if (ready && needsPlayers && !playersReady) {
+    content = (
+      <Splash
+        error={playersError}
+        apiBase={apiBase}
+        onRetry={playersError ? retryPlayers : null}
+        message={playersStatus === 'loading' ? '加载球员阵容中…' : '准备加载球员阵容…'}
+      />
+    );
   } else if (ready) {
     if (!cur) {
       if (tab === 'matches') { title = 'FIFA26'; sub = '2026 · 美加墨'; content = <MatchesScreen onOpenMatch={(m) => push({ type: 'match', match: m })} />; }
@@ -106,7 +136,14 @@ function Shell() {
       content = <PlayerDetailScreen player={cur.player} />;
     }
   } else if (!ready && tab !== 'lottery') {
-    content = <Splash error={error} apiBase={apiBase} />;
+    content = (
+      <Splash
+        error={coreError}
+        apiBase={apiBase}
+        onRetry={coreError ? retryCore : null}
+        message={coreStatus === 'loading' ? '加载赛程与球队数据中…' : '准备加载FIFA26数据…'}
+      />
+    );
   }
 
   return (
@@ -114,7 +151,7 @@ function Shell() {
       <StatusBar />
       <Header title={title} sub={sub} onBack={onBack} />
       {content}
-      {(ready || tab === 'lottery') && !cur && <TabBar tab={tab} onTab={switchTab} />}
+      {((ready && (!needsPlayers || playersReady)) || tab === 'lottery') && !cur && <TabBar tab={tab} onTab={switchTab} />}
     </div>
   );
 }

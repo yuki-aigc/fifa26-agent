@@ -2,7 +2,7 @@
    屏幕: 赛程 / 单场预测 / 球队 / 球队详情 / 球员 / 球员详情
    数据来自后端 API (useData);单场预测直接调用后端 /prediction 接口。
    =========================================================== */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useData } from '../data/store.jsx';
 import { api } from '../data/api.js';
 import { odds } from '../data/elo.js';
@@ -146,27 +146,54 @@ export function MatchDetailScreen({ match, onOpenTeam }) {
   const [loading, setLoading] = useState(true);
   const [aiLoading, setAiLoading] = useState(false);
   const [err, setErr] = useState(null);
+  const aiRequest = useRef(null);
+  const mounted = useRef(true);
 
   const A = byCode[match.home.code];
   const B = byCode[match.away.code];
 
   useEffect(() => {
-    let alive = true;
+    aiRequest.current?.abort();
+    const controller = new AbortController();
     setLoading(true);
     setErr(null);
-    api.prediction(match.id, { ai: false })
-      .then((p) => alive && setPred(p))
-      .catch((e) => alive && setErr(e.message))
-      .finally(() => alive && setLoading(false));
-    return () => { alive = false; };
+    api.prediction(match.id, { ai: false, signal: controller.signal })
+      .then((p) => {
+        if (mounted.current) setPred(p);
+      })
+      .catch((e) => {
+        if (mounted.current && e.name !== 'AbortError') setErr(e.message);
+      })
+      .finally(() => {
+        if (mounted.current && !controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
   }, [match.id]);
 
+  useEffect(() => () => {
+    mounted.current = false;
+    aiRequest.current?.abort();
+  }, []);
+
   const runAi = (refresh = false) => {
+    aiRequest.current?.abort();
+    const controller = new AbortController();
+    aiRequest.current = controller;
     setAiLoading(true);
-    api.prediction(match.id, { ai: true, refresh })
-      .then((p) => setPred(p))
-      .catch((e) => setErr(e.message))
-      .finally(() => setAiLoading(false));
+    setErr(null);
+    api.prediction(match.id, { ai: true, refresh, signal: controller.signal })
+      .then((p) => {
+        if (mounted.current) setPred(p);
+      })
+      .catch((e) => {
+        if (mounted.current && e.name !== 'AbortError') setErr(e.message);
+      })
+      .finally(() => {
+        if (aiRequest.current === controller) {
+          aiRequest.current = null;
+          if (mounted.current) setAiLoading(false);
+        }
+      });
   };
 
   if (loading || !pred) {
