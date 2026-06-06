@@ -17,6 +17,7 @@ import { upsertMatchStats } from '../services/stats.js';
 import { upsertInjury } from '../services/injuries.js';
 import { recomputeForm } from '../services/standings.js';
 import { gradeAllFinished } from '../services/accuracy.js';
+import { emitMatchEvent } from '../services/eventBus.js';
 
 function normName(s: string): string {
   return s.trim().toLowerCase().replace(/[^a-z]/g, '');
@@ -78,6 +79,7 @@ export async function runSync(opts: SyncOptions = {}): Promise<SyncResult> {
     const matchId = resolveMatchId(fx, nameToCode, extToMatch);
     if (!matchId) continue;
     const status = mapStatus(fx.fixture.status.short);
+    const prev = matchRows.find((r) => r.id === matchId);
     const res = await db
       .update(matches)
       .set({
@@ -92,10 +94,25 @@ export async function runSync(opts: SyncOptions = {}): Promise<SyncResult> {
       .run();
     if (res.changes > 0) {
       matchesUpdated++;
-      const m = matchRows.find((r) => r.id === matchId);
-      if (m) {
-        touchedTeams.add(m.homeCode);
-        touchedTeams.add(m.awayCode);
+      if (prev) {
+        touchedTeams.add(prev.homeCode);
+        touchedTeams.add(prev.awayCode);
+        const ts = Date.now();
+        const hs = fx.goals.home ?? undefined;
+        const as_ = fx.goals.away ?? undefined;
+        const el = fx.fixture.status.elapsed ?? undefined;
+        if (prev.status !== status) {
+          emitMatchEvent({ type: 'status_change', matchId, timestamp: ts, data: { status, elapsed: el, homeScore: hs, awayScore: as_ } });
+        }
+        if (fx.goals.home !== prev.homeScore || fx.goals.away !== prev.awayScore) {
+          emitMatchEvent({ type: 'score_update', matchId, timestamp: ts, data: { homeScore: hs, awayScore: as_, elapsed: el, status } });
+          if (fx.goals.home != null && prev.homeScore != null && fx.goals.home > prev.homeScore) {
+            emitMatchEvent({ type: 'goal', matchId, timestamp: ts, data: { team: prev.homeCode, homeScore: hs, awayScore: as_, elapsed: el } });
+          }
+          if (fx.goals.away != null && prev.awayScore != null && fx.goals.away > prev.awayScore) {
+            emitMatchEvent({ type: 'goal', matchId, timestamp: ts, data: { team: prev.awayCode, homeScore: hs, awayScore: as_, elapsed: el } });
+          }
+        }
       }
       if (status === 'finished' || status === 'live') finishedOrLive.push({ matchId, fixtureId: fx.fixture.id });
     }

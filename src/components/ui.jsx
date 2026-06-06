@@ -208,6 +208,53 @@ export function H2HChart({ home, away, h2h, recent = [], real = false, compLabel
   );
 }
 
+/* ---------- 赔率走势迷你折线图 (纯 SVG) ---------- */
+export function Sparkline({ series, height = 64 }) {
+  if (!series?.length || !series[0].data?.length) return null;
+  const maxLen = Math.max(...series.map((s) => s.data.length));
+  if (maxLen < 2) return null;
+
+  const pad = { top: 6, bottom: 6, left: 4, right: 4 };
+  const W = 280;
+  const H = height;
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top - pad.bottom;
+
+  const allVals = series.flatMap((s) => s.data);
+  const lo = Math.min(...allVals);
+  const hi = Math.max(...allVals);
+  const range = hi - lo || 1;
+
+  const toPath = (data) => {
+    const step = plotW / (maxLen - 1);
+    return data.map((v, i) => {
+      const x = pad.left + i * step;
+      const y = pad.top + plotH - ((v - lo) / range) * plotH;
+      return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+  };
+
+  return (
+    <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none"
+      style={{ display: 'block', borderRadius: 10, background: '#faf6ee' }}>
+      {series.map((s, i) => (
+        <polyline key={i} fill="none" stroke={s.color} strokeWidth="2.2" strokeLinecap="round"
+          strokeLinejoin="round" points={s.data.map((v, j) => {
+            const x = pad.left + j * (plotW / (maxLen - 1));
+            const y = pad.top + plotH - ((v - lo) / range) * plotH;
+            return `${x.toFixed(1)},${y.toFixed(1)}`;
+          }).join(' ')} />
+      ))}
+      {series.map((s, i) => {
+        const last = s.data[s.data.length - 1];
+        const x = pad.left + (s.data.length - 1) * (plotW / (maxLen - 1));
+        const y = pad.top + plotH - ((last - lo) / range) * plotH;
+        return <circle key={`d${i}`} cx={x} cy={y} r="3.5" fill="#fff" stroke={s.color} strokeWidth="2" />;
+      })}
+    </svg>
+  );
+}
+
 /* ---------- 区块标题 ---------- */
 export function SecH({ children }) {
   return (
@@ -226,6 +273,58 @@ export function Header({ title, sub, onBack }) {
       <div style={{ minWidth: 0 }}>
         <h1>{title}</h1>
         {sub && <div className="sub">{sub}</div>}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- 预测对比面板 ---------- */
+export function ComparisonPanel({ baseline, prediction, marketOdds, homeName, awayName }) {
+  const outcome = (o) => (o.win > o.loss ? 'home' : o.loss > o.win ? 'away' : 'draw');
+  const eloOdds = baseline?.odds;
+  const aiOdds = prediction?.engine === 'ai' ? { win: prediction.win, draw: prediction.draw, loss: prediction.loss } : null;
+  const mktOdds = marketOdds?.implied || null;
+
+  const sources = [eloOdds, aiOdds, mktOdds].filter(Boolean);
+  const outcomes = sources.map(outcome);
+  const hasDisagreement = new Set(outcomes).size > 1;
+
+  const colStyle = { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, flex: 1, padding: '0 4px' };
+  const numStyle = (color) => ({ fontSize: 18, fontWeight: 900, color, lineHeight: 1 });
+  const labelStyle = { fontSize: 10, fontWeight: 700, color: '#9f927d' };
+  const headerStyle = { fontSize: 11, fontWeight: 900, color: '#725d42', marginBottom: 4, textAlign: 'center' };
+  const disabledStyle = { opacity: 0.35 };
+
+  const renderCol = (odds, header, disabled) => (
+    <div style={{ ...colStyle, ...(disabled ? disabledStyle : {}) }}>
+      <div style={headerStyle}>{header}</div>
+      {odds ? (
+        <>
+          <span style={numStyle('#11a89b')}>{odds.win}%</span>
+          <span style={labelStyle}>{homeName}胜</span>
+          <span style={numStyle('#a07e08')}>{odds.draw}%</span>
+          <span style={labelStyle}>平</span>
+          <span style={numStyle('#e05a5a')}>{odds.loss}%</span>
+          <span style={labelStyle}>{awayName}胜</span>
+        </>
+      ) : (
+        <span style={{ fontSize: 11, fontWeight: 700, color: '#c4b89e', marginTop: 12 }}>{disabled === 'ai' ? '未加载' : '暂无赔率'}</span>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="card" style={{ padding: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <span style={{ fontWeight: 900, fontSize: 13, color: '#794f27' }}>多维对比</span>
+        {hasDisagreement && <span className="chip yellow" style={{ fontSize: 10 }}>⚠ 模型分歧</span>}
+      </div>
+      <div style={{ display: 'flex', borderTop: '2px dashed #e6ddc6', paddingTop: 10 }}>
+        {renderCol(eloOdds, '📊 Elo', false)}
+        <div style={{ width: 1, background: '#e6ddc6', margin: '0 2px' }} />
+        {renderCol(aiOdds, '🤖 AI', aiOdds ? false : 'ai')}
+        <div style={{ width: 1, background: '#e6ddc6', margin: '0 2px' }} />
+        {renderCol(mktOdds, '📈 市场', mktOdds ? false : 'market')}
       </div>
     </div>
   );

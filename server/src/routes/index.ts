@@ -2,15 +2,17 @@ import type { FastifyInstance } from 'fastify';
 import { listTeams, getTeamDetail } from '../services/teams.js';
 import { listPlayers, getPlayer } from '../services/players.js';
 import { listMatches, getMatchWithTeams, matchView, matchDetail } from '../services/matches.js';
-import { getPrediction } from '../services/predictions.js';
+import { getPrediction, streamPrediction } from '../services/predictions.js';
 import { accuracySummary } from '../services/accuracy.js';
 import { aiInfo, aiKeyAvailable } from '../ai/pi.js';
 import { config } from '../config.js';
 import { sqlite } from '../db/client.js';
 import { fetchLotteryList, fetchLotteryOdds, fetchFootballInfo, firoAvailable } from '../ingest/sources/firoApi.js';
-import { analyzeLotteryMatch } from '../services/lotteryAnalysis.js';
+import { analyzeLotteryMatch, streamLotteryAnalysis } from '../services/lotteryAnalysis.js';
 import { addLotteryMatchesServed, metricsSnapshot } from '../observability/metrics.js';
 import { evaluateAlertStatus } from '../observability/alerts.js';
+import { onMatchEvent } from '../services/eventBus.js';
+import { runTournamentSimulation } from '../services/tournament.js';
 
 export async function registerRoutes(app: FastifyInstance) {
   app.get('/health', async () => {
@@ -116,6 +118,66 @@ export async function registerRoutes(app: FastifyInstance) {
     },
   );
 
+  /* ── Tournament simulation ── */
+  app.get<{ Querystring: { iterations?: string } }>('/api/tournament/simulation', async (req) => {
+    const iterations = Math.min(50000, Math.max(1000, Number(req.query.iterations) || 10000));
+    return runTournamentSimulation(iterations);
+  });
+
+  /* ── SSE: AI 流式预测 ── */
+  app.get<{ Params: { id: string }; Querystring: { refresh?: string } }>(
+    '/api/matches/:id/prediction/stream',
+    async (req, reply) => {
+      const origin = req.headers.origin;
+      reply.raw.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+        ...(origin ? { 'Access-Control-Allow-Origin': origin } : {}),
+      });
+
+      const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
+      const write = (event: object) => reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+
+      try {
+        for await (const event of streamPrediction(req.params.id, { refresh })) {
+          write(event);
+        }
+      } catch (err) {
+        write({ type: 'error', message: (err as Error).message });
+      }
+
+      reply.raw.end();
+    },
+  );
+
+  /* ── SSE: 赛事实时推送 ── */
+  app.get('/api/events/matches', async (req, reply) => {
+    const origin = req.headers.origin;
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      ...(origin ? { 'Access-Control-Allow-Origin': origin } : {}),
+    });
+    reply.raw.write(':ok\n\n');
+
+    const heartbeat = setInterval(() => {
+      reply.raw.write(':ping\n\n');
+    }, 30_000);
+
+    const unsub = onMatchEvent((event) => {
+      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    });
+
+    req.raw.on('close', () => {
+      clearInterval(heartbeat);
+      unsub();
+    });
+  });
+
   /* ── Lottery (竞彩数据 via Firo API) ── */
   app.get('/api/lottery/matches', async (_req, reply) => {
     if (!firoAvailable()) return reply.code(503).send({ error: 'firo_not_configured' });
@@ -152,5 +214,43 @@ export async function registerRoutes(app: FastifyInstance) {
     const result = await analyzeLotteryMatch(match, info, oddsHistory);
     if (!result) return reply.code(503).send({ error: 'ai_not_available' });
     return result;
+  });
+
+  /* ── SSE: 竞彩 AI 流式分析 ── */
+  app.get<{ Params: { id: string } }>('/api/lottery/matches/:id/analysis/stream', async (req, reply) => {
+    if (!firoAvailable()) return reply.code(503).send({ error: 'firo_not_configured' });
+    const matchId = Number(req.params.id);
+    if (!matchId) return reply.code(400).send({ error: 'invalid_match_id' });
+
+    const origin = req.headers.origin;
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      ...(origin ? { 'Access-Control-Allow-Origin': origin } : {}),
+    });
+
+    const [matches, info, oddsHistory] = await Promise.all([
+      fetchLotteryList(),
+      fetchFootballInfo(matchId),
+      fetchLotteryOdds(matchId),
+    ]);
+    const match = matches.find((m) => m.matchMain.matchId === matchId);
+    if (!match) {
+      reply.raw.write(`data: ${JSON.stringify({ type: 'error', message: 'match_not_found' })}\n\n`);
+      reply.raw.end();
+      return;
+    }
+
+    const write = (event: object) => reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    try {
+      for await (const event of streamLotteryAnalysis(match, info, oddsHistory)) {
+        write(event);
+      }
+    } catch (err) {
+      write({ type: 'error', message: (err as Error).message });
+    }
+    reply.raw.end();
   });
 }

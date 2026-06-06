@@ -5,6 +5,7 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import { useCallback, useMemo, useRef } from 'react';
 import { api } from './api.js';
+import { useMatchEvents } from './sse.js';
 
 const DataContext = createContext(null);
 
@@ -22,14 +23,11 @@ export function DataProvider({ children }) {
   const [errors, setErrors] = useState({ core: null, players: null });
   const corePromise = useRef(null);
   const playersPromise = useRef(null);
-  const mounted = useRef(true);
-
-  useEffect(() => () => {
-    mounted.current = false;
-  }, []);
+  const statusRef = useRef(status);
+  statusRef.current = status;
 
   const loadCore = useCallback((opts = {}) => {
-    if (!opts.force && status.core === 'ready') return Promise.resolve();
+    if (!opts.force && statusRef.current.core === 'ready') return Promise.resolve();
     if (!opts.force && corePromise.current) return corePromise.current;
 
     setStatus((s) => ({ ...s, core: 'loading' }));
@@ -37,13 +35,11 @@ export function DataProvider({ children }) {
 
     corePromise.current = Promise.all([api.teams(), api.matches()])
       .then(([nextTeams, nextMatches]) => {
-        if (!mounted.current) return;
         setTeams(nextTeams);
         setMatches(nextMatches);
         setStatus((s) => ({ ...s, core: 'ready' }));
       })
       .catch((err) => {
-        if (!mounted.current) return;
         setErrors((e) => ({ ...e, core: err.message }));
         setStatus((s) => ({ ...s, core: 'error' }));
       })
@@ -52,10 +48,10 @@ export function DataProvider({ children }) {
       });
 
     return corePromise.current;
-  }, [status.core]);
+  }, []);
 
   const loadPlayers = useCallback((opts = {}) => {
-    if (!opts.force && status.players === 'ready') return Promise.resolve();
+    if (!opts.force && statusRef.current.players === 'ready') return Promise.resolve();
     if (!opts.force && playersPromise.current) return playersPromise.current;
 
     setStatus((s) => ({ ...s, players: 'loading' }));
@@ -63,12 +59,10 @@ export function DataProvider({ children }) {
 
     playersPromise.current = api.players()
       .then((nextPlayers) => {
-        if (!mounted.current) return;
         setPlayers(nextPlayers);
         setStatus((s) => ({ ...s, players: 'ready' }));
       })
       .catch((err) => {
-        if (!mounted.current) return;
         setErrors((e) => ({ ...e, players: err.message }));
         setStatus((s) => ({ ...s, players: 'error' }));
       })
@@ -77,7 +71,7 @@ export function DataProvider({ children }) {
       });
 
     return playersPromise.current;
-  }, [status.players]);
+  }, []);
 
   const byCode = useMemo(() => {
     const grouped = {};
@@ -89,6 +83,17 @@ export function DataProvider({ children }) {
     for (const code of Object.keys(grouped)) grouped[code].squad.sort((a, b) => b.ovr - a.ovr);
     return grouped;
   }, [teams, players]);
+
+  useMatchEvents(useCallback((event) => {
+    if (!event.matchId || !event.data) return;
+    const patch = {};
+    if (event.data.homeScore != null) patch.homeScore = event.data.homeScore;
+    if (event.data.awayScore != null) patch.awayScore = event.data.awayScore;
+    if (event.data.status) patch.status = event.data.status;
+    if (event.data.elapsed != null) patch.elapsed = event.data.elapsed;
+    if (Object.keys(patch).length === 0) return;
+    setMatches((prev) => prev.map((m) => m.id === event.matchId ? { ...m, ...patch } : m));
+  }, []));
 
   const value = {
     teams,

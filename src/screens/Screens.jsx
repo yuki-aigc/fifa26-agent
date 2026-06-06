@@ -6,7 +6,8 @@ import { useState, useEffect, useRef } from 'react';
 import { useData } from '../data/store.jsx';
 import { api } from '../data/api.js';
 import { odds } from '../data/elo.js';
-import { FlagBadge, StatBar, ProbBar, FormDots, Radar, SecH, OvrBadge, H2HChart } from '../components/ui.jsx';
+import { FlagBadge, StatBar, ProbBar, FormDots, Radar, SecH, OvrBadge, H2HChart, ComparisonPanel, Sparkline } from '../components/ui.jsx';
+import { useFavorites } from '../data/favorites.jsx';
 
 /* 开赛时间格式化 (本地时区) */
 function fmtKick(iso) {
@@ -56,14 +57,19 @@ function CompareRow({ f }) {
 }
 
 /* ---------------- 赛程列表 ---------------- */
-export function MatchesScreen({ onOpenMatch }) {
+export function MatchesScreen({ onOpenMatch, onOpenAccuracy }) {
   const { matches, byCode } = useData();
+  const { isFav, favCodes } = useFavorites();
+  const [favFilter, setFavFilter] = useState(false);
   const oddsFor = (m) => {
     const A = byCode[m.home.code];
     const B = byCode[m.away.code];
     return A && B ? odds(A, B) : { win: 33, draw: 34, loss: 33 };
   };
 
+  const hasFavs = favCodes.length > 0;
+  const isFavMatch = (m) => isFav(m.home.code) || isFav(m.away.code);
+  const displayMatches = favFilter ? matches.filter(isFavMatch) : matches;
   const focus = matches.find((x) => x.status === 'live') || matches[0];
 
   return (
@@ -107,13 +113,43 @@ export function MatchesScreen({ onOpenMatch }) {
         );
       })()}
 
+      {/* 预测战绩入口 */}
+      <div className="card press" onClick={onOpenAccuracy}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', marginBottom: 6 }}>
+        <span style={{ fontSize: 20 }}>📊</span>
+        <div style={{ flex: 1 }}>
+          <span style={{ fontWeight: 900, fontSize: 13, color: '#794f27' }}>预测战绩</span>
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#9f927d', marginLeft: 8 }}>查看模型命中率</span>
+        </div>
+        <span style={{ fontSize: 18, color: '#c4b89e', fontWeight: 900 }}>›</span>
+      </div>
+
       <SecH>全部赛程</SecH>
+      {hasFavs && (
+        <div style={{ display: 'flex', gap: 7, marginBottom: 14 }}>
+          <button onClick={() => setFavFilter(false)} className="chip" style={{
+            cursor: 'pointer', border: 'none',
+            background: !favFilter ? '#19c8b9' : '#fff',
+            color: !favFilter ? '#fff' : '#8a7b66',
+            boxShadow: !favFilter ? '0 3px 0 0 #11a89b' : '0 2px 0 0 #e6ddc6',
+            padding: '7px 15px',
+          }}>全部</button>
+          <button onClick={() => setFavFilter(true)} className="chip" style={{
+            cursor: 'pointer', border: 'none',
+            background: favFilter ? '#19c8b9' : '#fff',
+            color: favFilter ? '#fff' : '#8a7b66',
+            boxShadow: favFilter ? '0 3px 0 0 #11a89b' : '0 2px 0 0 #e6ddc6',
+            padding: '7px 15px',
+          }}>⭐ 我的球队</button>
+        </div>
+      )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
-        {matches.map((m) => {
+        {displayMatches.map((m) => {
           const o = oddsFor(m);
           const k = fmtKick(m.kickoff);
+          const faved = isFavMatch(m);
           return (
-            <div key={m.id} className="card press" onClick={() => onOpenMatch(m)} style={{ padding: 14 }}>
+            <div key={m.id} className="card press" onClick={() => onOpenMatch(m)} style={{ padding: 14, borderLeft: faved ? '3px solid #f5c31c' : undefined }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 11 }}>
                 <span className="chip">{m.stage}</span>
                 <span style={{ fontWeight: 800, fontSize: 11.5, color: '#9f927d' }}>{k.day} · {k.time}</span>
@@ -146,8 +182,8 @@ export function MatchDetailScreen({ match, onOpenTeam }) {
   const [loading, setLoading] = useState(true);
   const [aiLoading, setAiLoading] = useState(false);
   const [err, setErr] = useState(null);
+  const [reasoning, setReasoning] = useState('');
   const aiRequest = useRef(null);
-  const mounted = useRef(true);
 
   const A = byCode[match.home.code];
   const B = byCode[match.away.code];
@@ -159,19 +195,18 @@ export function MatchDetailScreen({ match, onOpenTeam }) {
     setErr(null);
     api.prediction(match.id, { ai: false, signal: controller.signal })
       .then((p) => {
-        if (mounted.current) setPred(p);
+        if (!controller.signal.aborted) setPred(p);
       })
       .catch((e) => {
-        if (mounted.current && e.name !== 'AbortError') setErr(e.message);
+        if (e.name !== 'AbortError') setErr(e.message);
       })
       .finally(() => {
-        if (mounted.current && !controller.signal.aborted) setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
   }, [match.id]);
 
   useEffect(() => () => {
-    mounted.current = false;
     aiRequest.current?.abort();
   }, []);
 
@@ -181,19 +216,35 @@ export function MatchDetailScreen({ match, onOpenTeam }) {
     aiRequest.current = controller;
     setAiLoading(true);
     setErr(null);
-    api.prediction(match.id, { ai: true, refresh, signal: controller.signal })
-      .then((p) => {
-        if (mounted.current) setPred(p);
-      })
-      .catch((e) => {
-        if (mounted.current && e.name !== 'AbortError') setErr(e.message);
-      })
-      .finally(() => {
-        if (aiRequest.current === controller) {
-          aiRequest.current = null;
-          if (mounted.current) setAiLoading(false);
+    setReasoning('');
+    api.predictionStream(match.id, {
+      refresh,
+      signal: controller.signal,
+      onEvent: (event) => {
+        if (controller.signal.aborted) return;
+        if (event.type === 'thinking' || event.type === 'text') {
+          setReasoning((prev) => prev + event.delta);
         }
-      });
+        if (event.type === 'prediction') {
+          setPred((prev) => prev ? { ...prev, prediction: event.prediction, ai: true, aiFallback: false } : prev);
+        }
+        if (event.type === 'done') {
+          setAiLoading(false);
+          if (aiRequest.current === controller) aiRequest.current = null;
+        }
+        if (event.type === 'error') {
+          setErr(event.message);
+          setAiLoading(false);
+          if (aiRequest.current === controller) aiRequest.current = null;
+        }
+      },
+    }).catch((e) => {
+      if (e.name !== 'AbortError') {
+        setErr(e.message);
+        setAiLoading(false);
+      }
+      if (aiRequest.current === controller) aiRequest.current = null;
+    });
   };
 
   if (loading || !pred) {
@@ -228,6 +279,16 @@ export function MatchDetailScreen({ match, onOpenTeam }) {
         </div>
       </div>
 
+      {/* 多维对比 */}
+      <SecH>预测对比</SecH>
+      <ComparisonPanel
+        baseline={bl}
+        prediction={p}
+        marketOdds={pred.odds}
+        homeName={match.home.name}
+        awayName={match.away.name}
+      />
+
       {/* 胜率预测 */}
       <SecH>胜率预测</SecH>
       <div className="card">
@@ -258,6 +319,16 @@ export function MatchDetailScreen({ match, onOpenTeam }) {
           </button>
         )}
       </div>
+
+      {/* AI 流式推理 */}
+      {aiLoading && reasoning && (
+        <div className="card" style={{ marginTop: 14, padding: 14, maxHeight: 200, overflowY: 'auto' }}>
+          <span className="chip mint" style={{ marginBottom: 8, display: 'inline-block' }}>🤖 AI 思考中…</span>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#725d42', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+            {reasoning}<span style={{ animation: 'blink 1s steps(1) infinite' }}>▋</span>
+          </div>
+        </div>
+      )}
 
       {/* 关键因素 + AI 分析 */}
       {(p.keyFactors?.length > 0 || p.reasoning) && (
@@ -309,6 +380,7 @@ export function MatchDetailScreen({ match, onOpenTeam }) {
 /* ---------------- 球队列表 ---------------- */
 export function TeamsScreen({ onOpenTeam }) {
   const { teams } = useData();
+  const { isFav, toggleFav } = useFavorites();
   return (
     <div className="screen pop">
       <SecH>球队实力榜</SecH>
@@ -316,6 +388,10 @@ export function TeamsScreen({ onOpenTeam }) {
         {teams.map((t, i) => (
           <div key={t.code} className="card press" onClick={() => onOpenTeam(t.code)} style={{ padding: 14, textAlign: 'center', position: 'relative' }}>
             <span style={{ position: 'absolute', top: 10, left: 12, fontSize: 11, fontWeight: 900, color: i < 3 ? '#f5c31c' : '#c4b89e' }}>#{i + 1}</span>
+            <span className="fav-star" onClick={(e) => { e.stopPropagation(); toggleFav(t.code); }}
+              style={{ position: 'absolute', top: 8, right: 10, fontSize: 18, color: isFav(t.code) ? '#f5c31c' : '#c4b89e', cursor: 'pointer', lineHeight: 1 }}>
+              {isFav(t.code) ? '★' : '☆'}
+            </span>
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 9 }}><FlagBadge code={t.code} size={50} /></div>
             <div style={{ fontWeight: 900, fontSize: 15, color: '#794f27' }}>{t.name}</div>
             <div style={{ fontSize: 10.5, fontWeight: 700, color: '#9f927d', marginBottom: 9, height: 14, overflow: 'hidden' }}>{t.note}</div>
@@ -334,13 +410,20 @@ export function TeamsScreen({ onOpenTeam }) {
 /* ---------------- 球队详情 ---------------- */
 export function TeamDetailScreen({ code, onOpenPlayer }) {
   const { byCode } = useData();
+  const { isFav, toggleFav } = useFavorites();
   const t = byCode[code];
   if (!t) return <div className="screen pop"><div className="card">未找到球队</div></div>;
   return (
     <div className="screen pop">
       <div className="card" style={{ textAlign: 'center', padding: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 10 }}><FlagBadge code={code} size={72} /></div>
-        <div style={{ fontWeight: 900, fontSize: 22, color: '#794f27' }}>{t.name}</div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+          <span style={{ fontWeight: 900, fontSize: 22, color: '#794f27' }}>{t.name}</span>
+          <span className="fav-star" onClick={() => toggleFav(code)}
+            style={{ fontSize: 22, color: isFav(code) ? '#f5c31c' : '#c4b89e', cursor: 'pointer', lineHeight: 1 }}>
+            {isFav(code) ? '★' : '☆'}
+          </span>
+        </div>
         <div style={{ fontSize: 12, fontWeight: 700, color: '#9f927d', marginBottom: 12 }}>{t.note}</div>
         <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
           <span className="chip">世界排名 #{t.rank}</span>
@@ -460,6 +543,156 @@ export function PlayerDetailScreen({ player }) {
       <div className="card">
         {entries.map(([k, v]) => <StatBar key={k} label={k} value={v} />)}
       </div>
+    </div>
+  );
+}
+
+/* ---------------- 预测准确率仪表盘 ---------------- */
+export function AccuracyScreen() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    api.accuracy()
+      .then(setData)
+      .catch((e) => setErr(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="screen pop" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
+        <div style={{ fontSize: 44 }}>📊</div>
+        <div style={{ fontWeight: 800, fontSize: 14, color: '#9f927d' }}>加载预测战绩…</div>
+      </div>
+    );
+  }
+
+  if (err) {
+    return (
+      <div className="screen pop">
+        <div className="card" style={{ textAlign: 'center', padding: 30, color: '#e05a5a', fontWeight: 800 }}>加载失败: {err}</div>
+      </div>
+    );
+  }
+
+  if (!data?.length) {
+    return (
+      <div className="screen pop">
+        <SecH>预测战绩</SecH>
+        <div className="card" style={{ textAlign: 'center', padding: 30 }}>
+          <div style={{ fontSize: 36, marginBottom: 10 }}>🎯</div>
+          <div style={{ fontWeight: 800, fontSize: 14, color: '#9f927d' }}>暂无已对账的预测</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#c4b89e', marginTop: 6 }}>比赛结束后将自动对账预测结果</div>
+        </div>
+      </div>
+    );
+  }
+
+  const elo = data.find((e) => e.engine === 'elo');
+  const ai = data.find((e) => e.engine === 'ai');
+  const totalGraded = data.reduce((s, e) => s + e.graded, 0);
+  const totalHits = data.reduce((s, e) => s + e.outcomeHit, 0);
+
+  return (
+    <div className="screen pop">
+      <SecH>总览</SecH>
+      <div className="card" style={{ padding: 18, textAlign: 'center' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 24 }}>
+          <div>
+            <div style={{ fontSize: 36, fontWeight: 900, color: '#11a89b', lineHeight: 1 }}>{totalGraded}</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#9f927d', marginTop: 4 }}>已对账场次</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 36, fontWeight: 900, color: '#f5c31c', lineHeight: 1 }}>{totalHits}</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#9f927d', marginTop: 4 }}>胜平负命中</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 36, fontWeight: 900, color: '#794f27', lineHeight: 1 }}>
+              {totalGraded ? Math.round((totalHits / totalGraded) * 100) : 0}%
+            </div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#9f927d', marginTop: 4 }}>综合命中率</div>
+          </div>
+        </div>
+      </div>
+
+      <SecH>模型对比</SecH>
+      {data.map((e) => {
+        const label = e.engine === 'elo' ? '📊 Elo 基线模型' : `🤖 AI · ${e.model || e.engine}`;
+        return (
+          <div key={`${e.engine}|${e.model}`} className="card" style={{ padding: 16, marginBottom: 12 }}>
+            <div style={{ fontWeight: 900, fontSize: 14, color: '#794f27', marginBottom: 12 }}>{label}</div>
+
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
+                <span style={{ fontSize: 12, fontWeight: 800, color: '#8a7b66' }}>胜平负命中</span>
+                <span style={{ fontSize: 14, fontWeight: 900, color: '#11a89b' }}>{e.outcomeRate}%</span>
+              </div>
+              <div style={{ height: 12, background: '#ece3cf', borderRadius: 50, overflow: 'hidden' }}>
+                <div style={{
+                  width: `${e.outcomeRate}%`, height: '100%',
+                  background: 'linear-gradient(90deg, #19c8b9, #11a89b)', borderRadius: 50,
+                  transition: 'width .7s cubic-bezier(0.4,0,0.2,1)',
+                }} />
+              </div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#9f927d', marginTop: 4 }}>
+                {e.outcomeHit} / {e.graded} 场命中
+              </div>
+            </div>
+
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
+                <span style={{ fontSize: 12, fontWeight: 800, color: '#8a7b66' }}>精确比分</span>
+                <span style={{ fontSize: 14, fontWeight: 900, color: '#f5c31c' }}>{e.scoreRate}%</span>
+              </div>
+              <div style={{ height: 12, background: '#ece3cf', borderRadius: 50, overflow: 'hidden' }}>
+                <div style={{
+                  width: `${e.scoreRate}%`, height: '100%',
+                  background: 'linear-gradient(90deg, #f5c31c, #e0b800)', borderRadius: 50,
+                  transition: 'width .7s cubic-bezier(0.4,0,0.2,1)',
+                }} />
+              </div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#9f927d', marginTop: 4 }}>
+                {e.scoreHit} / {e.graded} 场命中
+              </div>
+            </div>
+          </div>
+        );
+      })}
+
+      {elo && ai && (
+        <>
+          <SecH>Elo vs AI</SecH>
+          <div className="card" style={{ padding: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+              <span style={{ flex: 1, textAlign: 'center' }}>
+                <div style={{ fontSize: 28, fontWeight: 900, color: '#11a89b' }}>{elo.outcomeRate}%</div>
+                <div style={{ fontSize: 11, fontWeight: 800, color: '#9f927d' }}>Elo</div>
+              </span>
+              <span style={{ fontSize: 12, fontWeight: 900, color: '#c4b89e' }}>VS</span>
+              <span style={{ flex: 1, textAlign: 'center' }}>
+                <div style={{ fontSize: 28, fontWeight: 900, color: '#e05a5a' }}>{ai.outcomeRate}%</div>
+                <div style={{ fontSize: 11, fontWeight: 800, color: '#9f927d' }}>AI</div>
+              </span>
+            </div>
+            <div style={{ display: 'flex', height: 14, borderRadius: 50, overflow: 'hidden', gap: 3 }}>
+              <div style={{
+                flex: elo.outcomeRate, background: '#19c8b9', borderRadius: '50px 0 0 50px',
+                transition: 'flex .7s cubic-bezier(0.4,0,0.2,1)',
+              }} />
+              <div style={{
+                flex: ai.outcomeRate, background: '#e05a5a', borderRadius: '0 50px 50px 0',
+                transition: 'flex .7s cubic-bezier(0.4,0,0.2,1)',
+              }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 10, fontWeight: 700, color: '#9f927d' }}>
+              <span>Elo {elo.graded}场</span>
+              <span>AI {ai.graded}场</span>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { predictions } from '../db/schema.js';
 import { odds, score, factors, h2h } from '../domain/elo.js';
 import type { Prediction, Team, Factor } from '../domain/types.js';
 import { predictWithAI, type Baseline } from '../ai/predictor.js';
+import { streamPredictWithAI, type StreamEvent } from '../ai/streamPredictor.js';
 import { aiInfo } from '../ai/pi.js';
 import { getMatchWithTeams, matchView } from './matches.js';
 import { getSquad } from './teams.js';
@@ -170,4 +171,67 @@ export async function getPrediction(matchId: string, opts: { ai?: boolean; refre
     aiRequested: !!opts.ai,
     aiFallback: !!opts.ai && !usedAi, // 请求了 AI 但回退到 Elo (无 key/失败)
   };
+}
+
+/* ── 流式预测 (SSE 用) ──────────────────────────── */
+export type PredictionStreamEvent =
+  | { type: 'baseline'; baseline: Baseline; match: ReturnType<typeof matchView> }
+  | StreamEvent;
+
+export async function* streamPrediction(
+  matchId: string,
+  opts: { refresh?: boolean } = {},
+): AsyncGenerator<PredictionStreamEvent> {
+  const mwt = await getMatchWithTeams(matchId);
+  if (!mwt) {
+    yield { type: 'error', message: 'match_not_found' };
+    return;
+  }
+  const { match, home, away } = mwt;
+
+  const real = await realH2H(home.code, away.code);
+  const baseline: Baseline = {
+    odds: odds(home, away),
+    score: score(home, away),
+    factors: factors(home, away),
+    h2h: real.real ? { total: real.total, aw: real.aw, dr: real.dr, bw: real.bw } : h2h(home, away),
+  };
+
+  yield { type: 'baseline', baseline, match: matchView(match, home, away) };
+
+  const cached = opts.refresh ? undefined : await readCachedAi(matchId);
+  if (cached) {
+    yield { type: 'prediction', prediction: cached };
+    yield { type: 'done' };
+    return;
+  }
+
+  const [homeRecord, awayRecord, homeStats, awayStats, oddsLine,
+         homeInjuries, awayInjuries, homeRestDays, awayRestDays,
+         homePlayers, awayPlayers] = await Promise.all([
+    teamRecord(home.code),
+    teamRecord(away.code),
+    teamStatAverages(home.code),
+    teamStatAverages(away.code),
+    latestOddsLine(matchId, home.name, away.name),
+    getMatchInjuries(matchId, home.code),
+    getMatchInjuries(matchId, away.code),
+    match.kickoff ? getTeamRestDays(home.code, match.kickoff) : Promise.resolve(null),
+    match.kickoff ? getTeamRestDays(away.code, match.kickoff) : Promise.resolve(null),
+    getSquad(home.code),
+    getSquad(away.code),
+  ]);
+
+  for await (const event of streamPredictWithAI({
+    home, away, homePlayers, awayPlayers,
+    stage: match.stage, baseline,
+    homeRecord, awayRecord, homeStats, awayStats,
+    oddsLine: oddsLine?.text,
+    homeInjuries, awayInjuries, homeRestDays, awayRestDays,
+  })) {
+    yield event;
+    if (event.type === 'prediction') {
+      await writeCachedAi(matchId, event.prediction);
+    }
+  }
 }

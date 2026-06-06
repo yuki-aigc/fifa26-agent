@@ -1,9 +1,9 @@
 /* ===========================================================
    竞彩屏幕: 赛程列表 + 单场详情 (数据来自 Firo API)
    =========================================================== */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api } from '../data/api.js';
-import { SecH } from '../components/ui.jsx';
+import { SecH, Sparkline } from '../components/ui.jsx';
 
 const POOL_LABEL = { HAD: '胜平负', HHAD: '让球', HAFU: '半全场', TTG: '总进球', CRS: '比分' };
 const POOL_CODES = ['HAD', 'HHAD', 'HAFU', 'TTG', 'CRS'];
@@ -232,6 +232,8 @@ export function LotteryDetailScreen({ match }) {
   const [aiLoading, setAiLoading] = useState(false);
   const [analysis, setAnalysis] = useState(null);
   const [aiErr, setAiErr] = useState(null);
+  const [reasoning, setReasoning] = useState('');
+  const aiRequest = useRef(null);
 
   useEffect(() => {
     api.lotteryMatch(mm.matchId)
@@ -240,18 +242,48 @@ export function LotteryDetailScreen({ match }) {
       .finally(() => setLoading(false));
   }, [mm.matchId]);
 
+  useEffect(() => () => { aiRequest.current?.abort(); }, []);
+
   const had = match.matchOddsList?.find((o) => o.poolCode === 'HAD');
   const hhad = match.matchOddsList?.find((o) => o.poolCode === 'HHAD');
   const pools = match.matchPoolList || [];
   const isSelling = (code) => pools.find((p) => p.poolCode === code)?.poolStatus === 'Selling';
 
   const runAnalysis = () => {
+    aiRequest.current?.abort();
+    const controller = new AbortController();
+    aiRequest.current = controller;
     setAiLoading(true);
     setAiErr(null);
-    api.lotteryAnalysis(mm.matchId)
-      .then(setAnalysis)
-      .catch((e) => setAiErr(e.message))
-      .finally(() => setAiLoading(false));
+    setReasoning('');
+    setAnalysis(null);
+    api.lotteryAnalysisStream(mm.matchId, {
+      signal: controller.signal,
+      onEvent: (event) => {
+        if (controller.signal.aborted) return;
+        if (event.type === 'thinking' || event.type === 'text') {
+          setReasoning((prev) => prev + event.delta);
+        }
+        if (event.type === 'analysis') {
+          setAnalysis(event.analysis);
+        }
+        if (event.type === 'done') {
+          setAiLoading(false);
+          if (aiRequest.current === controller) aiRequest.current = null;
+        }
+        if (event.type === 'error') {
+          setAiErr(event.message);
+          setAiLoading(false);
+          if (aiRequest.current === controller) aiRequest.current = null;
+        }
+      },
+    }).catch((e) => {
+      if (e.name !== 'AbortError') {
+        setAiErr(e.message);
+        setAiLoading(false);
+      }
+      if (aiRequest.current === controller) aiRequest.current = null;
+    });
   };
 
   const info = detail?.info;
@@ -355,6 +387,30 @@ export function LotteryDetailScreen({ match }) {
                 </button>
               ))}
             </div>
+            {/* 赔率走势折线图 */}
+            {(() => {
+              const records = oddsTab === 'HAD' ? oddsHistory.hadOddsList : oddsHistory.hhadOddsList;
+              if (!records?.length) return null;
+              return (
+                <div style={{ marginBottom: 12 }}>
+                  <Sparkline
+                    height={64}
+                    series={[
+                      { label: '主胜', color: '#11a89b', data: records.map((r) => Number(r.homeWinOdds)) },
+                      { label: '平', color: '#a07e08', data: records.map((r) => Number(r.drawOdds)) },
+                      { label: '客胜', color: '#e05a5a', data: records.map((r) => Number(r.awayWinOdds)) },
+                    ]}
+                  />
+                  <div style={{ display: 'flex', justifyContent: 'center', gap: 16, marginTop: 6 }}>
+                    {[['主胜', '#11a89b'], ['平', '#a07e08'], ['客胜', '#e05a5a']].map(([l, c]) => (
+                      <span key={l} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 800, color: '#9f927d' }}>
+                        <span style={{ width: 10, height: 3, borderRadius: 2, background: c }} />{l}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
             <OddsTrendTable
               records={oddsTab === 'HAD' ? oddsHistory.hadOddsList : oddsHistory.hhadOddsList}
               homeLabel={mm.homeTeamName.slice(0, 4)}
@@ -503,7 +559,7 @@ export function LotteryDetailScreen({ match }) {
       {/* AI 分析 */}
       <SecH>AI 竞彩分析</SecH>
       <div className="card">
-        {!analysis && !aiLoading && (
+        {!analysis && !aiLoading && !aiErr && (
           <>
             <div style={{ fontSize: 12, fontWeight: 700, color: '#9f927d', marginBottom: 14, lineHeight: 1.6 }}>
               结合实时赔率走势、历史交锋、主客场特征与近期状态，AI 将给出竞彩选购建议。
@@ -513,10 +569,18 @@ export function LotteryDetailScreen({ match }) {
             </button>
           </>
         )}
-        {aiLoading && (
+        {aiLoading && reasoning && (
+          <div style={{ marginBottom: 14, padding: 14, maxHeight: 200, overflowY: 'auto', background: '#faf6ee', borderRadius: 14, border: '2px solid #e6ddc6' }}>
+            <span className="chip mint" style={{ marginBottom: 8, display: 'inline-block' }}>🤖 AI 思考中…</span>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#725d42', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+              {reasoning}<span style={{ animation: 'blink 1s steps(1) infinite' }}>▋</span>
+            </div>
+          </div>
+        )}
+        {aiLoading && !reasoning && (
           <div style={{ textAlign: 'center', padding: '24px 0', color: '#9f927d', fontWeight: 800 }}>
             <div style={{ fontSize: 24, marginBottom: 8 }}>🤖</div>
-            AI 分析中，请稍候…
+            AI 分析中…
           </div>
         )}
         {aiErr && (
@@ -535,8 +599,8 @@ export function LotteryDetailScreen({ match }) {
             <div style={{ fontSize: 13, fontWeight: 600, color: '#725d42', lineHeight: 1.75, marginBottom: 14 }}>
               {analysis.reasoning}
             </div>
-            {analysis.confidence && (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {analysis.confidence != null && (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span className="chip mint">置信度 {analysis.confidence}%</span>
                 {analysis.recommendation && (
                   <span className="chip yellow">推荐: {analysis.recommendation}</span>

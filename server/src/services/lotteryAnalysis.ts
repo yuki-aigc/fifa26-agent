@@ -3,7 +3,7 @@
    输入: 单场 Firo API 完整数据 (赔率 + 走势 + 情报)
    输出: AI 建议 (推荐玩法 + 理由 + 置信度)
    =========================================================== */
-import { completeSimple, type Context } from '@earendil-works/pi-ai';
+import { completeSimple, streamSimple, type Context } from '@earendil-works/pi-ai';
 import { resolveModel, aiKeyAvailable, aiInfo, aiRequestOptions } from '../ai/pi.js';
 import type { FiroMatchItem, FiroFootballInfo, FiroOddsHistory } from '../ingest/sources/firoApi.js';
 import { aiLogger } from '../observability/logger.js';
@@ -187,5 +187,69 @@ export async function analyzeLotteryMatch(
     recordAiAnalysis(durationMs, false);
     aiLogger.error({ matchId, durationMs, err }, 'ai_analysis_failed');
     return null;
+  }
+}
+
+/* ── 流式竞彩分析 (SSE 用) ──────────────────────────── */
+
+export type LotteryStreamEvent =
+  | { type: 'thinking'; delta: string }
+  | { type: 'text'; delta: string }
+  | { type: 'analysis'; analysis: LotteryAnalysisResult }
+  | { type: 'done' }
+  | { type: 'error'; message: string };
+
+export async function* streamLotteryAnalysis(
+  match: FiroMatchItem,
+  info: FiroFootballInfo,
+  oddsHistory: FiroOddsHistory,
+): AsyncGenerator<LotteryStreamEvent> {
+  const matchId = match.matchMain.matchId;
+  if (!aiKeyAvailable()) {
+    yield { type: 'error', message: 'AI 密钥未配置' };
+    return;
+  }
+  const model = resolveModel();
+  if (!model) {
+    yield { type: 'error', message: '无法解析 AI 模型' };
+    return;
+  }
+
+  const context: Context = {
+    systemPrompt: SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: buildPrompt(match, info, oddsHistory), timestamp: Date.now() }],
+    tools: [analysisToolDef],
+  };
+
+  try {
+    const eventStream = streamSimple(model, context, aiRequestOptions());
+    for await (const event of eventStream) {
+      switch (event.type) {
+        case 'thinking_delta':
+          yield { type: 'thinking', delta: event.delta };
+          break;
+        case 'text_delta':
+          yield { type: 'text', delta: event.delta };
+          break;
+        case 'toolcall_end': {
+          const call = event.toolCall;
+          if (call.name !== analysisToolDef.name) break;
+          const parsed = parseLotteryAnalysisToolCall(
+            [{ type: 'toolCall', name: call.name, arguments: call.arguments }],
+            matchId,
+          );
+          if (parsed) yield { type: 'analysis', analysis: parsed };
+          break;
+        }
+        case 'done':
+          yield { type: 'done' };
+          break;
+        case 'error':
+          yield { type: 'error', message: String((event.error as any)?.message ?? 'AI 流式错误') };
+          break;
+      }
+    }
+  } catch (err) {
+    yield { type: 'error', message: (err as Error).message };
   }
 }

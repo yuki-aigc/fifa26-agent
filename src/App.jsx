@@ -3,6 +3,7 @@
    =========================================================== */
 import { useState, useEffect } from 'react';
 import { DataProvider, useData } from './data/store.jsx';
+import { FavoritesProvider } from './data/favorites.jsx';
 import { Header } from './components/ui.jsx';
 import {
   MatchesScreen,
@@ -11,8 +12,10 @@ import {
   TeamDetailScreen,
   PlayersScreen,
   PlayerDetailScreen,
+  AccuracyScreen,
 } from './screens/Screens.jsx';
 import { LotteryScreen, LotteryDetailScreen } from './screens/LotteryScreens.jsx';
+import { TournamentScreen } from './screens/TournamentScreen.jsx';
 
 function StatusBar() {
   const [t, setT] = useState('');
@@ -33,6 +36,7 @@ function TabBar({ tab, onTab }) {
   const items = [
     { k: 'lottery', label: '竞彩', ic: '🎲' },
     { k: 'matches', label: '赛程', ic: '⚽' },
+    { k: 'tournament', label: '模拟', ic: '🏆' },
     { k: 'teams', label: '球队', ic: '🛡️' },
     { k: 'players', label: '球员', ic: '👤' },
   ];
@@ -89,7 +93,7 @@ function Shell() {
   const switchTab = (k) => { setTab(k); setStack([]); };
 
   const cur = stack[stack.length - 1] || null;
-  const needsCore = tab !== 'lottery' || cur?.type === 'match' || cur?.type === 'team' || cur?.type === 'player';
+  const needsCore = (tab !== 'lottery' && tab !== 'tournament') || cur?.type === 'match' || cur?.type === 'team' || cur?.type === 'player';
   const needsPlayers = cur?.type === 'team' || cur?.type === 'player' || tab === 'players';
   const ready = !needsCore || coreReady;
 
@@ -107,6 +111,9 @@ function Shell() {
   if (tab === 'lottery' && !cur) {
     title = '竞彩分析'; sub = 'AI 辅助 · 全玩法';
     content = <LotteryScreen onOpenMatch={(m) => push({ type: 'lottery', match: m })} />;
+  } else if (tab === 'tournament' && !cur) {
+    title = '锦标赛模拟'; sub = '蒙特卡洛 · Elo 预测';
+    content = <TournamentScreen />;
   } else if (cur?.type === 'lottery') {
     const mm = cur.match.matchMain;
     title = `${mm.homeTeamName} vs ${mm.awayTeamName}`; sub = mm.matchNumStr;
@@ -122,7 +129,7 @@ function Shell() {
     );
   } else if (ready) {
     if (!cur) {
-      if (tab === 'matches') { title = 'FIFA26'; sub = '2026 · 美加墨'; content = <MatchesScreen onOpenMatch={(m) => push({ type: 'match', match: m })} />; }
+      if (tab === 'matches') { title = 'FIFA26'; sub = '2026 · 美加墨'; content = <MatchesScreen onOpenMatch={(m) => push({ type: 'match', match: m })} onOpenAccuracy={() => push({ type: 'accuracy' })} />; }
       if (tab === 'teams') { title = '球队分析'; sub = '48强实力数据'; content = <TeamsScreen onOpenTeam={(c) => push({ type: 'team', code: c })} />; }
       if (tab === 'players') { title = '球员能力'; sub = '面板属性 · 五维雷达'; content = <PlayersScreen onOpenPlayer={(pl) => push({ type: 'player', player: pl })} />; }
     } else if (cur.type === 'match') {
@@ -134,6 +141,9 @@ function Shell() {
     } else if (cur.type === 'player') {
       title = '球员详情'; sub = cur.player.team.name;
       content = <PlayerDetailScreen player={cur.player} />;
+    } else if (cur.type === 'accuracy') {
+      title = '预测战绩'; sub = 'Elo vs AI 命中率';
+      content = <AccuracyScreen />;
     }
   } else if (!ready && tab !== 'lottery') {
     content = (
@@ -151,7 +161,7 @@ function Shell() {
       <StatusBar />
       <Header title={title} sub={sub} onBack={onBack} />
       {content}
-      {((ready && (!needsPlayers || playersReady)) || tab === 'lottery') && !cur && <TabBar tab={tab} onTab={switchTab} />}
+      {((ready && (!needsPlayers || playersReady)) || tab === 'lottery' || tab === 'tournament') && !cur && <TabBar tab={tab} onTab={switchTab} />}
     </div>
   );
 }
@@ -159,7 +169,9 @@ function Shell() {
 export default function App() {
   return (
     <DataProvider>
-      <Shell />
+      <FavoritesProvider>
+        <Shell />
+      </FavoritesProvider>
     </DataProvider>
   );
 }

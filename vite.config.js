@@ -10,6 +10,7 @@ export default defineConfig({
     setupFiles: './src/test/setup.js',
   },
   server: {
+    host: true,
     proxy: {
       '/api':    'http://localhost:8787',
       '/health': 'http://localhost:8787',
