@@ -17,6 +17,7 @@ import { upsertMatchStats } from '../services/stats.js';
 import { upsertInjury } from '../services/injuries.js';
 import { recomputeForm } from '../services/standings.js';
 import { gradeAllFinished } from '../services/accuracy.js';
+import { gradeAllLotteryFinished } from '../services/lotteryAccuracy.js';
 import { emitMatchEvent } from '../services/eventBus.js';
 
 function normName(s: string): string {
@@ -40,6 +41,7 @@ export interface SyncResult {
   oddsRows: number;
   injuriesRows: number;
   graded: number;
+  lotteryGraded: number;
 }
 
 export async function runSync(opts: SyncOptions = {}): Promise<SyncResult> {
@@ -50,7 +52,7 @@ export async function runSync(opts: SyncOptions = {}): Promise<SyncResult> {
 
   if (!config.apiFootball.key) {
     log('⚠ 未配置 API_FOOTBALL_KEY,跳过实时同步 (种子数据已可用)。');
-    return { skipped: true, fixtures: 0, matchesUpdated: 0, statsTeams: 0, oddsRows: 0, injuriesRows: 0, graded: 0 };
+    return { skipped: true, fixtures: 0, matchesUpdated: 0, statsTeams: 0, oddsRows: 0, injuriesRows: 0, graded: 0, lotteryGraded: 0 };
   }
 
   // 名称/externalId 索引
@@ -212,9 +214,11 @@ export async function runSync(opts: SyncOptions = {}): Promise<SyncResult> {
   for (const code of touchedTeams) await recomputeForm(code);
   const graded = await gradeAllFinished();
   if (graded) log(`  · 预测打分 ${graded} 条`);
+  const lotteryGraded = await gradeAllLotteryFinished();
+  if (lotteryGraded) log(`  · 竞彩注单对账 ${lotteryGraded} 条`);
 
   log(`✅ 同步完成`);
-  return { fixtures: fixtures.length, matchesUpdated, statsTeams, oddsRows, injuriesRows, graded };
+  return { fixtures: fixtures.length, matchesUpdated, statsTeams, oddsRows, injuriesRows, graded, lotteryGraded };
 }
 
 /** 把一条 fixture 对齐到我们的 match id (externalId 优先, 回退 队名+日期)。 */

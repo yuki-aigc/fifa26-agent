@@ -26,10 +26,12 @@ describe('gradeLotteryPick', () => {
   it('grades HHAD with the stored goal line', () => {
     expect(gradeLotteryPick(match, pick('HHAD', 'DRAW', '让球平', { goalLine: '-1' }))).toBe(true);
     expect(gradeLotteryPick(match, pick('HHAD', 'HOME', '让球主胜', { goalLine: '-1' }))).toBe(false);
+    expect(gradeLotteryPick(match, pick('HHAD', 'HOME', '让球主胜'))).toBeNull();
   });
 
   it('grades TTG and CRS when option parsing is stable', () => {
     expect(gradeLotteryPick(match, pick('TTG', '3', '总进球3'))).toBe(true);
+    expect(gradeLotteryPick(match, pick('TTG', '2-3球', '2-3球'))).toBe(true);
     expect(gradeLotteryPick(match, pick('TTG', '4', '总进球4'))).toBe(false);
     expect(gradeLotteryPick(match, pick('CRS', '2:1', '2:1'))).toBe(true);
     expect(gradeLotteryPick(match, pick('CRS', '1:1', '1:1'))).toBe(false);

@@ -14,7 +14,7 @@ import {
   PlayerDetailScreen,
   AccuracyScreen,
 } from './screens/Screens.jsx';
-import { LotteryScreen, LotteryDetailScreen } from './screens/LotteryScreens.jsx';
+import { LotteryScreen, LotteryDetailScreen, LotteryAccuracyScreen } from './screens/LotteryScreens.jsx';
 import { TournamentScreen } from './screens/TournamentScreen.jsx';
 
 function StatusBar() {
@@ -85,7 +85,7 @@ function Shell() {
     retryCore,
     retryPlayers,
   } = useData();
-  const [tab, setTab] = useState('matches');
+  const [tab, setTab] = useState('lottery');
   const [stack, setStack] = useState([]);
 
   const push = (v) => setStack((s) => [...s, v]);
@@ -110,10 +110,13 @@ function Shell() {
   // 竞彩 tab 不依赖 DataProvider (独立拉 Firo 数据), 先处理
   if (tab === 'lottery' && !cur) {
     title = '竞彩分析'; sub = 'AI 辅助 · 全玩法';
-    content = <LotteryScreen onOpenMatch={(m) => push({ type: 'lottery', match: m })} />;
+    content = <LotteryScreen onOpenMatch={(m) => push({ type: 'lottery', match: m })} onOpenAccuracy={() => push({ type: 'lottery-accuracy' })} />;
   } else if (tab === 'tournament' && !cur) {
     title = '锦标赛模拟'; sub = '蒙特卡洛 · Elo 预测';
     content = <TournamentScreen />;
+  } else if (cur?.type === 'lottery-accuracy') {
+    title = '竞彩战绩'; sub = 'AI 注单命中率 · ROI';
+    content = <LotteryAccuracyScreen />;
   } else if (cur?.type === 'lottery') {
     const mm = cur.match.matchMain;
     title = `${mm.homeTeamName} vs ${mm.awayTeamName}`; sub = mm.matchNumStr;

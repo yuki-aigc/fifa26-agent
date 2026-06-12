@@ -5,9 +5,11 @@ import { lotteryMatches, lotteryOddsSnapshots } from '../db/schema.js';
 import {
   parseMatchOddsSnapshots,
   parseOddsHistorySnapshots,
+  listStoredLotteryMatches,
+  upsertLotteryEvent,
   upsertLotteryMatch,
 } from './lotteryStore.js';
-import type { FiroMatchItem, FiroOddsHistory } from '../ingest/sources/firoApi.js';
+import type { FiroMatchItem, FiroOddsHistory, FiroSoccerEvent } from '../ingest/sources/firoApi.js';
 
 const testFiroMatchId = 909900002;
 
@@ -135,5 +137,46 @@ describe('lotteryStore odds parsing', () => {
       .from(lotteryOddsSnapshots)
       .where(eq(lotteryOddsSnapshots.firoMatchId, testFiroMatchId));
     expect(rows).toHaveLength(6);
+  });
+
+  it('keeps finished soccer-events visible in the lottery list with reconstructed odds', async () => {
+    await upsertLotteryMatch(sampleMatchItem(), null);
+    await upsertLotteryEvent({
+      idEvent: 'fixture-1',
+      idLeague: 'wc',
+      strLeague: 'World Cup',
+      strSeason: '2099',
+      idHomeTeam: '1',
+      strHomeTeam: 'Canada',
+      idAwayTeam: '2',
+      strAwayTeam: 'Bosnia',
+      strCountry: '',
+      intHomeScore: '2',
+      intAwayScore: '0',
+      intRound: null,
+      strStatus: 'FT',
+      strPostponed: null,
+      strLocked: null,
+      dateEventLocalBj: '2099-01-01',
+      strTimeLocalBj: '03:00',
+      homeStrTeamZh: '加拿大',
+      homeStrBadgeUrl: '',
+      awayStrTeamZh: '波黑',
+      awayStrBadgeUrl: '',
+      finishLeagueZh: '世界杯',
+      shortLeagueZh: '世界杯',
+      strCountryZh: '',
+      badgeUrl: '',
+      isJc: 1,
+      matchId: testFiroMatchId,
+    } satisfies FiroSoccerEvent, null);
+
+    const stored = await listStoredLotteryMatches('2099-01-01');
+    const match = stored.find((m) => m.matchMain.matchId === testFiroMatchId);
+
+    expect(match?.matchMain.matchStatus).toBe('FT');
+    expect((match?.matchMain as any).homeScore).toBe(2);
+    expect((match?.matchMain as any).awayScore).toBe(0);
+    expect(match?.matchOddsList).toHaveLength(2);
   });
 });

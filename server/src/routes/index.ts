@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { listTeams, getTeamDetail } from '../services/teams.js';
 import { listPlayers, getPlayer } from '../services/players.js';
 import { listMatches, getMatchWithTeams, matchView, matchDetail } from '../services/matches.js';
-import { getPrediction, streamPrediction } from '../services/predictions.js';
+import { getPrediction, latestEligiblePredictionRuns, listPredictionRuns, streamPrediction } from '../services/predictions.js';
 import { accuracySummary } from '../services/accuracy.js';
 import { aiInfo, aiKeyAvailable } from '../ai/pi.js';
 import { config } from '../config.js';
@@ -16,6 +16,8 @@ import { runTournamentSimulation } from '../services/tournament.js';
 import {
   buildStoredOddsHistory,
   getStoredLotteryMatch,
+  latestLotteryAnalysisResult,
+  latestLotteryOddsCapturedAt,
   listStoredLotteryMatches,
   persistLotteryAnalysis,
   upsertLotteryOddsHistory,
@@ -50,6 +52,36 @@ export async function registerRoutes(app: FastifyInstance) {
     return stored;
   }
 
+  function oddsHistoryHasData(oddsHistory: Awaited<ReturnType<typeof buildStoredOddsHistory>>) {
+    return Boolean(
+      oddsHistory.hadOddsList?.length ||
+      oddsHistory.hhadOddsList?.length ||
+      oddsHistory.hafuOddsList?.length ||
+      oddsHistory.ttgOddsList?.length ||
+      oddsHistory.crsOddsList?.length,
+    );
+  }
+
+  function isFinishedLotteryStatus(status?: string) {
+    return /^(FT|AET|PEN|FINISHED|FINISHED_AFTER_EXTRA_TIME|FINISHED_AFTER_PENALTY)$/i.test(status || '');
+  }
+
+  async function shouldRefreshLotteryDetail(
+    stored: NonNullable<Awaited<ReturnType<typeof getStoredLotteryMatch>>>,
+    oddsHistory: Awaited<ReturnType<typeof buildStoredOddsHistory>>,
+    refresh: boolean,
+  ) {
+    if (!firoAvailable()) return false;
+    if (refresh) return true;
+    if (isFinishedLotteryStatus(stored.row.matchStatus)) return false;
+    if (!oddsHistoryHasData(oddsHistory)) return true;
+
+    const capturedAt = await latestLotteryOddsCapturedAt(stored.row.firoMatchId);
+    if (!capturedAt) return true;
+    const ttlMs = Math.max(1, config.sync.firoDetailTtlMin) * 60_000;
+    return Date.now() - capturedAt.getTime() > ttlMs;
+  }
+
   app.get('/health', async () => {
     let dbOk = true;
     try {
@@ -79,6 +111,7 @@ export async function registerRoutes(app: FastifyInstance) {
         firoEnabled: config.sync.firoEnabled,
         firoIntervalMin: config.sync.firoIntervalMin,
         firoDays: config.sync.firoDays,
+        firoDetailTtlMin: config.sync.firoDetailTtlMin,
       },
       firo: { keyConfigured: firoAvailable() },
       metrics: {
@@ -155,6 +188,14 @@ export async function registerRoutes(app: FastifyInstance) {
       return result;
     },
   );
+
+  app.get<{ Params: { id: string } }>('/api/matches/:id/prediction/history', async (req) => {
+    return { runs: await listPredictionRuns(req.params.id) };
+  });
+
+  app.get<{ Params: { id: string } }>('/api/matches/:id/prediction/latest', async (req) => {
+    return { runs: await latestEligiblePredictionRuns(req.params.id) };
+  });
 
   /* ── Tournament simulation ── */
   app.get<{ Querystring: { iterations?: string } }>('/api/tournament/simulation', async (req) => {
@@ -238,7 +279,7 @@ export async function registerRoutes(app: FastifyInstance) {
 
     let info = null;
     let oddsHistory = await buildStoredOddsHistory(matchId);
-    if (firoAvailable()) {
+    if (await shouldRefreshLotteryDetail(stored, oddsHistory, refresh)) {
       try {
         const [nextInfo, nextOddsHistory] = await Promise.all([
           fetchFootballInfo(matchId),
@@ -252,7 +293,13 @@ export async function registerRoutes(app: FastifyInstance) {
       }
     }
 
-    return { matchId, match: stored.match, info, oddsHistory };
+    return {
+      matchId,
+      match: stored.match,
+      info,
+      oddsHistory,
+      latestAnalysis: await latestLotteryAnalysisResult(matchId),
+    };
   });
 
   app.get<{ Params: { id: string } }>('/api/lottery/matches/:id/analysis', async (req, reply) => {

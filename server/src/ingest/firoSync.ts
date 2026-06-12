@@ -18,6 +18,8 @@ import {
   upsertLotteryMatch,
   upsertLotteryOddsHistory,
 } from '../services/lotteryStore.js';
+import { gradeAllFinished } from '../services/accuracy.js';
+import { gradeAllLotteryFinished } from '../services/lotteryAccuracy.js';
 import {
   firoAvailable,
   fetchLotteryAllList,
@@ -93,12 +95,12 @@ export async function runFiroSync(opts: {
   const log = (...a: unknown[]) => !opts.quiet && console.log(...a);
   if (!firoAvailable()) {
     log('⚠ 未配置 FIRO_API_KEY/FIRO_PRIVATE_KEY,跳过 Firo 同步。');
-    return { skipped: true, dates: 0, lotteryMatches: 0, soccerEvents: 0, matched: 0, oddsRows: 0, oddsSnapshots: 0, unmatched: 0, filteredOut: 0, failedDates: [] };
+    return { skipped: true, dates: 0, lotteryMatches: 0, soccerEvents: 0, matched: 0, oddsRows: 0, oddsSnapshots: 0, graded: 0, lotteryGraded: 0, unmatched: 0, filteredOut: 0, failedDates: [] };
   }
 
   const dateList = opts.dates?.length
     ? opts.dates
-    : Array.from({ length: opts.days ?? 14 }, (_, i) => localDate(i));
+    : Array.from({ length: opts.days ?? 2 }, (_, i) => localDate(i));
 
   if (opts.resetFiroOdds) {
     const deleted = await deleteFiroHadOdds();
@@ -114,6 +116,8 @@ export async function runFiroSync(opts: {
   let oddsRows = 0;
   let oddsSnapshots = 0;
   let filteredOut = 0;
+  let graded = 0;
+  let lotteryGraded = 0;
   const failedDates: string[] = [];
   const oddsFetched = new Set<number>();
 
@@ -202,9 +206,11 @@ export async function runFiroSync(opts: {
   }
 
   log(`✅ Firo 同步完成: ${dateList.length} 天 / 原始竞足 ${rawLotteryMatches} 场 / 原始足球赛程 ${rawSoccerEvents} 场`);
-  log(`   世界杯过滤后: 竞足 ${lotteryMatches} 场 / 足球赛程 ${soccerEvents} 场, 匹配 ${matched} 场, 写入 legacy 赔率 ${oddsRows} 条, 写入快照 ${oddsSnapshots} 条, 过滤非世界杯 ${filteredOut} 场`);
+  graded = await gradeAllFinished();
+  lotteryGraded = await gradeAllLotteryFinished();
+  log(`   世界杯过滤后: 竞足 ${lotteryMatches} 场 / 足球赛程 ${soccerEvents} 场, 匹配 ${matched} 场, 写入 legacy 赔率 ${oddsRows} 条, 写入快照 ${oddsSnapshots} 条, 过滤非世界杯 ${filteredOut} 场, 预测对账 ${graded} 条, 竞彩注单对账 ${lotteryGraded} 条`);
   if (failedDates.length) log(`   ⚠ 失败请求: ${failedDates.join(', ')}`);
-  return { dates: dateList.length, lotteryMatches, soccerEvents, matched, oddsRows, oddsSnapshots, unmatched: 0, filteredOut, failedDates };
+  return { dates: dateList.length, lotteryMatches, soccerEvents, matched, oddsRows, oddsSnapshots, graded, lotteryGraded, unmatched: 0, filteredOut, failedDates };
 }
 
 const isCli = process.argv[1]?.endsWith('firoSync.ts') || process.argv[1]?.endsWith('firoSync.js');
@@ -213,7 +219,7 @@ if (isCli) {
   const dates = argv
     .filter((a) => a.startsWith('--date='))
     .map((a) => a.slice('--date='.length));
-  const days = Number(argv.find((a) => a.startsWith('--days='))?.slice('--days='.length) ?? '30');
+  const days = Number(argv.find((a) => a.startsWith('--days='))?.slice('--days='.length) ?? '2');
   const resetFiroOdds = argv.includes('--reset-firo-odds');
   const refreshDetails = argv.includes('--refresh-details');
   runFiroSync({ dates, days, resetFiroOdds, refreshDetails })

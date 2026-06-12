@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { predictions } from '../db/schema.js';
+import { predictionRuns, predictions } from '../db/schema.js';
+import type { MatchRow, PredictionRunRow } from '../db/schema.js';
 import { odds, score, factors, h2h } from '../domain/elo.js';
 import type { Prediction, Team, Factor } from '../domain/types.js';
 import { predictWithAI, type Baseline } from '../ai/predictor.js';
@@ -13,6 +14,8 @@ import { realH2H } from './h2h.js';
 import { teamStatAverages, getTeamRestDays } from './stats.js';
 import { latestOddsLine } from './odds.js';
 import { getMatchInjuries } from './injuries.js';
+
+const PROMPT_VERSION = 'v1';
 
 function eloKeyFactors(fs: Factor[], home: Team, away: Team): string[] {
   return fs
@@ -94,6 +97,116 @@ async function writeCachedAi(matchId: string, p: Prediction): Promise<void> {
     });
 }
 
+function predictionPhase(match: MatchRow, createdAt = new Date()): 'pre_match' | 'live' | 'post_match' {
+  if (match.status === 'finished') return 'post_match';
+  if (match.status === 'live') return 'live';
+  if (match.kickoff && createdAt >= match.kickoff) return 'live';
+  return 'pre_match';
+}
+
+function buildInputSnapshot(args: {
+  match: MatchRow;
+  home: Team;
+  away: Team;
+  baseline: Baseline;
+  homeRecord: unknown;
+  awayRecord: unknown;
+  homeStats: unknown;
+  awayStats: unknown;
+  oddsLine?: string;
+  homeInjuries: unknown[];
+  awayInjuries: unknown[];
+  homeRestDays: number | null;
+  awayRestDays: number | null;
+}) {
+  return {
+    match: {
+      id: args.match.id,
+      stage: args.match.stage,
+      kickoff: args.match.kickoff?.toISOString() ?? null,
+      status: args.match.status,
+    },
+    teams: {
+      home: { code: args.home.code, name: args.home.name, ovr: args.home.ovr },
+      away: { code: args.away.code, name: args.away.name, ovr: args.away.ovr },
+    },
+    baseline: args.baseline,
+    records: { home: args.homeRecord, away: args.awayRecord },
+    teamStats: { home: args.homeStats, away: args.awayStats },
+    oddsLine: args.oddsLine ?? null,
+    injuries: {
+      home: args.homeInjuries,
+      away: args.awayInjuries,
+    },
+    restDays: {
+      home: args.homeRestDays,
+      away: args.awayRestDays,
+    },
+  };
+}
+
+async function writePredictionRun(args: {
+  match: MatchRow;
+  prediction: Prediction;
+  inputSnapshot: unknown;
+}): Promise<PredictionRunRow> {
+  const createdAt = new Date();
+  const phase = predictionPhase(args.match, createdAt);
+  const eligibleForAccuracy = phase === 'pre_match';
+  const provider = args.prediction.provider ?? (args.prediction.engine === 'ai' ? aiInfo.provider : '');
+  const model = args.prediction.model ?? (args.prediction.engine === 'ai' ? aiInfo.model : '');
+  if (eligibleForAccuracy) {
+    await db
+      .update(predictionRuns)
+      .set({ isLatestEligible: false })
+      .where(and(
+        eq(predictionRuns.matchId, args.match.id),
+        eq(predictionRuns.engine, args.prediction.engine),
+        eq(predictionRuns.provider, provider),
+        eq(predictionRuns.model, model),
+        eq(predictionRuns.eligibleForAccuracy, true),
+      ));
+  }
+
+  const rows = await db
+    .insert(predictionRuns)
+    .values({
+      matchId: args.match.id,
+      engine: args.prediction.engine,
+      provider,
+      model,
+      promptVersion: PROMPT_VERSION,
+      win: args.prediction.win,
+      draw: args.prediction.draw,
+      loss: args.prediction.loss,
+      predScoreHome: args.prediction.predScoreHome,
+      predScoreAway: args.prediction.predScoreAway,
+      confidence: args.prediction.confidence,
+      keyFactors: args.prediction.keyFactors,
+      reasoning: args.prediction.reasoning,
+      inputSnapshot: args.inputSnapshot,
+      kickoffAt: args.match.kickoff ?? null,
+      phase,
+      eligibleForAccuracy,
+      isLatestEligible: eligibleForAccuracy,
+      createdAt,
+    })
+    .returning();
+  return rows[0];
+}
+
+export async function listPredictionRuns(matchId: string): Promise<PredictionRunRow[]> {
+  return db.select().from(predictionRuns).where(eq(predictionRuns.matchId, matchId)).orderBy(predictionRuns.createdAt);
+}
+
+export async function latestEligiblePredictionRuns(matchId: string): Promise<PredictionRunRow[]> {
+  return db
+    .select()
+    .from(predictionRuns)
+    .where(and(eq(predictionRuns.matchId, matchId), eq(predictionRuns.isLatestEligible, true)))
+    .orderBy(predictionRuns.createdAt);
+}
+
 export async function getPrediction(matchId: string, opts: { ai?: boolean; refresh?: boolean } = {}) {
   const mwt = await getMatchWithTeams(matchId);
   if (!mwt) return undefined;
@@ -151,6 +264,25 @@ export async function getPrediction(matchId: string, opts: { ai?: boolean; refre
       });
       if (aiPred) {
         await writeCachedAi(matchId, aiPred);
+        await writePredictionRun({
+          match,
+          prediction: aiPred,
+          inputSnapshot: buildInputSnapshot({
+            match,
+            home,
+            away,
+            baseline,
+            homeRecord,
+            awayRecord,
+            homeStats,
+            awayStats,
+            oddsLine: oddsLine?.text,
+            homeInjuries,
+            awayInjuries,
+            homeRestDays,
+            awayRestDays,
+          }),
+        });
         prediction = aiPred;
         usedAi = true;
       }
@@ -232,6 +364,25 @@ export async function* streamPrediction(
     yield event;
     if (event.type === 'prediction') {
       await writeCachedAi(matchId, event.prediction);
+      await writePredictionRun({
+        match,
+        prediction: event.prediction,
+        inputSnapshot: buildInputSnapshot({
+          match,
+          home,
+          away,
+          baseline,
+          homeRecord,
+          awayRecord,
+          homeStats,
+          awayStats,
+          oddsLine: oddsLine?.text,
+          homeInjuries,
+          awayInjuries,
+          homeRestDays,
+          awayRestDays,
+        }),
+      });
     }
   }
 }

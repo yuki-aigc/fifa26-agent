@@ -1,5 +1,5 @@
 /* ===========================================================
-   竞彩屏幕: 赛程列表 + 单场详情 (数据来自 Firo API)
+   竞彩屏幕: 赛程列表 + 单场详情 + 竞彩战绩 (数据来自 Firo API)
    =========================================================== */
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../data/api.js';
@@ -7,6 +7,47 @@ import { SecH, Sparkline } from '../components/ui.jsx';
 
 const POOL_LABEL = { HAD: '胜平负', HHAD: '让球', HAFU: '半全场', TTG: '总进球', CRS: '比分' };
 const POOL_CODES = ['HAD', 'HHAD', 'HAFU', 'TTG', 'CRS'];
+const TIER_STYLE = {
+  '稳健': { bg: '#eef7e2', color: '#5a9e1e', border: '#d6ebbb', emoji: '🟢' },
+  '均衡': { bg: '#fdf3cf', color: '#a07e08', border: '#f4e29a', emoji: '🟡' },
+  '博胆': { bg: '#fff0f0', color: '#e05a5a', border: '#f8c8c8', emoji: '🔴' },
+};
+const tierStyle = (tier) => TIER_STYLE[tier] || { bg: '#f8f8f0', color: '#9f927d', border: '#e6ddc6', emoji: '⚪' };
+const FINISHED_STATUS = new Set(['FT', 'AET', 'PEN', 'END', 'FINISHED']);
+const LIVE_STATUS = new Set(['1H', '2H', 'HT', 'ET', 'BT', 'P', 'LIVE', 'INT', 'IN_PLAY']);
+const LIVE_WINDOW_MS = 150 * 60 * 1000;
+
+function parseKickoffMs(mm) {
+  const date = mm.matchStartDate || mm.matchDate;
+  if (!date || !mm.matchTime) return null;
+  const time = String(mm.matchTime).length === 5 ? `${mm.matchTime}:00` : mm.matchTime;
+  const d = new Date(`${date}T${time}+08:00`);
+  return Number.isNaN(d.getTime()) ? null : d.getTime();
+}
+
+function displayKickoff(mm) {
+  return `${(mm.matchStartDate || mm.matchDate || '').slice(5)} ${mm.matchTime || ''}`.trim();
+}
+
+function matchPhase(mm, now = Date.now()) {
+  const status = String(mm.matchStatus || mm.status || '').toUpperCase();
+  if (FINISHED_STATUS.has(status)) return 'finished';
+  if (LIVE_STATUS.has(status)) return 'live';
+  if (mm.homeScore != null && mm.awayScore != null) return 'finished';
+  const kickoff = parseKickoffMs(mm);
+  if (kickoff && now >= kickoff && now < kickoff + LIVE_WINDOW_MS) return 'live';
+  return 'upcoming';
+}
+
+function phaseMeta(phase) {
+  if (phase === 'finished') return { label: '已结束', className: 'green', color: '#5a9e1e' };
+  if (phase === 'live') return { label: '进行中', className: 'mint', color: '#11a89b' };
+  return { label: '即将开赛', className: '', color: '#9f927d' };
+}
+
+function hasScore(mm) {
+  return mm.homeScore != null && mm.awayScore != null;
+}
 
 /* 赔率单元: value + 升降箭头 */
 export function OddsCell({ label, value, flag, big }) {
@@ -101,16 +142,23 @@ function RecentRow({ r }) {
 }
 
 /* ── 竞彩赛程列表 ── */
-export function LotteryScreen({ onOpenMatch }) {
+export function LotteryScreen({ onOpenMatch, onOpenAccuracy }) {
   const [matches, setMatches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
+  const [phaseFilter, setPhaseFilter] = useState('upcoming');
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     api.lotteryMatches()
       .then(setMatches)
       .catch((e) => setErr(e.message))
       .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
   }, []);
 
   if (loading) return (
@@ -131,35 +179,79 @@ export function LotteryScreen({ onOpenMatch }) {
     </div>
   );
 
-  const sellingCount = matches.filter(m => m.matchMain.matchStatus === 'Selling').length;
+  const counts = matches.reduce((acc, m) => {
+    const phase = matchPhase(m.matchMain, now);
+    acc[phase] = (acc[phase] || 0) + 1;
+    acc.all++;
+    return acc;
+  }, { all: 0, live: 0, upcoming: 0, finished: 0 });
+  const shownMatches = phaseFilter === 'all'
+    ? matches
+    : matches.filter((m) => matchPhase(m.matchMain, now) === phaseFilter);
+  const filters = [
+    ['all', '全部', counts.all],
+    ['live', '进行中', counts.live],
+    ['upcoming', '即将开赛', counts.upcoming],
+    ['finished', '已结束', counts.finished],
+  ];
 
   return (
     <div className="screen pop">
+      {/* 竞彩战绩入口 */}
+      <div className="card press" onClick={onOpenAccuracy}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', marginBottom: 6 }}>
+        <span style={{ fontSize: 20 }}>🎯</span>
+        <div style={{ flex: 1 }}>
+          <span style={{ fontWeight: 900, fontSize: 13, color: '#794f27' }}>竞彩战绩</span>
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#9f927d', marginLeft: 8 }}>AI 注单命中率 · ROI</span>
+        </div>
+        <span style={{ fontSize: 18, color: '#c4b89e', fontWeight: 900 }}>›</span>
+      </div>
+
       <SecH>竞彩赛程</SecH>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-        <span className="chip mint">{sellingCount} 场在售</span>
-        <span className="chip">{matches.length} 场合计</span>
+      <div style={{ display: 'flex', gap: 7, marginBottom: 14, flexWrap: 'wrap' }}>
+        {filters.map(([key, label, count]) => (
+          <button key={key} onClick={() => setPhaseFilter(key)}
+            className="chip"
+            style={{
+              cursor: 'pointer',
+              border: 'none',
+              background: phaseFilter === key ? '#19c8b9' : '#fff',
+              color: phaseFilter === key ? '#fff' : '#8a7b66',
+              boxShadow: phaseFilter === key ? '0 3px 0 0 #11a89b' : '0 2px 0 0 #e6ddc6',
+              padding: '7px 12px',
+            }}>
+            {label} {count}
+          </button>
+        ))}
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
-        {matches.map((m) => {
+        {shownMatches.map((m) => {
           const mm = m.matchMain;
           const had = m.matchOddsList?.find((o) => o.poolCode === 'HAD');
           const hhad = m.matchOddsList?.find((o) => o.poolCode === 'HHAD');
           const sellingPools = (m.matchPoolList || []).filter((p) => p.poolStatus === 'Selling').map((p) => p.poolCode);
-          const isSelling = mm.matchStatus === 'Selling';
+          const phase = matchPhase(mm, now);
+          const meta = phaseMeta(phase);
+          const isInactive = phase === 'finished';
 
           return (
-            <div key={mm.matchId} className={'card press' + (isSelling ? '' : '')} onClick={() => onOpenMatch(m)}
-              style={{ padding: 14, opacity: isSelling ? 1 : 0.72 }}>
+            <div key={mm.matchId} className="card press" onClick={() => onOpenMatch(m)}
+              style={{ padding: 14, opacity: isInactive ? 0.82 : 1 }}>
               {/* 头部: 联赛 + 场次号 + 时间 */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                 <span className="chip" style={{ fontSize: 10, padding: '3px 10px', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {mm.leagueShort || mm.leagueName}
                 </span>
                 <span style={{ fontWeight: 900, fontSize: 12, color: '#11a89b' }}>{mm.matchNumStr}</span>
+                <span className={'chip ' + meta.className} style={{ fontSize: 10, padding: '3px 9px', color: meta.color }}>
+                  {meta.label}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: -4, marginBottom: 8 }}>
                 <span style={{ fontWeight: 700, fontSize: 11, color: '#9f927d' }}>
-                  {mm.matchDate?.slice(5)} {mm.matchTime}
+                  {displayKickoff(mm)}
                 </span>
               </div>
 
@@ -170,7 +262,9 @@ export function LotteryScreen({ onOpenMatch }) {
                     onError={(e) => { e.target.style.display = 'none'; }} />
                 )}
                 <span style={{ fontWeight: 900, fontSize: 14, color: '#794f27', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{mm.homeTeamName}</span>
-                <span style={{ fontWeight: 800, fontSize: 12, color: '#c4b89e', flex: 'none' }}>VS</span>
+                <span style={{ fontWeight: 900, fontSize: hasScore(mm) ? 17 : 12, color: hasScore(mm) ? '#11a89b' : '#c4b89e', flex: 'none', minWidth: hasScore(mm) ? 46 : 24, textAlign: 'center' }}>
+                  {hasScore(mm) ? `${mm.homeScore}:${mm.awayScore}` : 'VS'}
+                </span>
                 <span style={{ fontWeight: 900, fontSize: 14, color: '#794f27', flex: 1, textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{mm.awayTeamName}</span>
                 {mm.awayTeamBadgeUrl && (
                   <img src={mm.awayTeamBadgeUrl} alt="" style={{ width: 26, height: 26, borderRadius: '50%', border: '2px solid #e6ddc6', flex: 'none' }}
@@ -236,8 +330,17 @@ export function LotteryDetailScreen({ match }) {
   const aiRequest = useRef(null);
 
   useEffect(() => {
+    setAnalysis(null);
+    setAiErr(null);
+    setReasoning('');
+    setErr(null);
+    setDetail(null);
+    setLoading(true);
     api.lotteryMatch(mm.matchId)
-      .then(setDetail)
+      .then((d) => {
+        setDetail(d);
+        if (d.latestAnalysis) setAnalysis(d.latestAnalysis);
+      })
       .catch((e) => setErr(e.message))
       .finally(() => setLoading(false));
   }, [mm.matchId]);
@@ -248,6 +351,7 @@ export function LotteryDetailScreen({ match }) {
   const hhad = match.matchOddsList?.find((o) => o.poolCode === 'HHAD');
   const pools = match.matchPoolList || [];
   const isSelling = (code) => pools.find((p) => p.poolCode === code)?.poolStatus === 'Selling';
+  const meta = phaseMeta(matchPhase(mm));
 
   const runAnalysis = () => {
     aiRequest.current?.abort();
@@ -296,7 +400,10 @@ export function LotteryDetailScreen({ match }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <span className="chip mint" style={{ fontSize: 11 }}>{mm.matchNumStr}</span>
           <span className="chip" style={{ fontSize: 10 }}>{mm.leagueShort || mm.leagueName}</span>
-          <span style={{ fontSize: 11, fontWeight: 700, color: '#9f927d' }}>{mm.matchDate} {mm.matchTime}</span>
+          <span className={'chip ' + meta.className} style={{ fontSize: 10, padding: '3px 9px', color: meta.color }}>{meta.label}</span>
+        </div>
+        <div style={{ textAlign: 'right', fontSize: 11, fontWeight: 700, color: '#9f927d', marginTop: -7, marginBottom: 10 }}>
+          {mm.matchStartDate || mm.matchDate} {mm.matchTime}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, width: 96 }}>
@@ -309,7 +416,9 @@ export function LotteryDetailScreen({ match }) {
           </div>
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 11, fontWeight: 800, color: '#9f927d', marginBottom: 4 }}>主场</div>
-            <div style={{ fontSize: 26, fontWeight: 900, color: '#c4b89e', letterSpacing: '0.1em' }}>VS</div>
+            <div style={{ fontSize: hasScore(mm) ? 32 : 26, fontWeight: 900, color: hasScore(mm) ? '#11a89b' : '#c4b89e', letterSpacing: hasScore(mm) ? '0.02em' : '0.1em' }}>
+              {hasScore(mm) ? `${mm.homeScore}:${mm.awayScore}` : 'VS'}
+            </div>
             <div style={{ fontSize: 11, fontWeight: 800, color: '#9f927d', marginTop: 4 }}>客场</div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, width: 96 }}>
@@ -325,16 +434,19 @@ export function LotteryDetailScreen({ match }) {
 
       {/* 实时赔率 */}
       <SecH>实时赔率</SecH>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-        {['HAD', 'HHAD'].map((code) => (
+      <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+        {POOL_CODES.map((code) => (
           <button key={code} onClick={() => setOddsTab(code)}
             className="chip"
+            disabled={!isSelling(code) && code !== 'HAD' && code !== 'HHAD'}
             style={{
-              cursor: 'pointer', border: 'none',
+              cursor: isSelling(code) || code === 'HAD' || code === 'HHAD' ? 'pointer' : 'default',
+              border: 'none',
               background: oddsTab === code ? '#19c8b9' : '#fff',
               color: oddsTab === code ? '#fff' : '#8a7b66',
               boxShadow: oddsTab === code ? '0 3px 0 0 #11a89b' : '0 2px 0 0 #e6ddc6',
-              padding: '7px 18px',
+              padding: '7px 14px',
+              opacity: !isSelling(code) && code !== 'HAD' && code !== 'HHAD' ? 0.45 : 1,
             }}>
             {POOL_LABEL[code]}
           </button>
@@ -356,6 +468,97 @@ export function LotteryDetailScreen({ match }) {
         />
       )}
 
+      {/* HAFU 半全场赔率网格 */}
+      {oddsTab === 'HAFU' && (() => {
+        const raw = oddsHistory?.hafuOddsList;
+        if (!raw?.length) return <div className="card" style={{ textAlign: 'center', padding: 20, color: '#9f927d', fontWeight: 700, fontSize: 12 }}>暂无半全场赔率数据</div>;
+        const latest = parsePoolSnapshot(raw, 'HAFU');
+        const labels = ['主-主', '主-平', '主-客', '平-主', '平-平', '平-客', '客-主', '客-平', '客-客'];
+        const codes = ['HH', 'HD', 'HA', 'DH', 'DD', 'DA', 'AH', 'AD', 'AA'];
+        return (
+          <div style={{ background: '#fff', borderRadius: 18, padding: 14, border: '2px solid #e6ddc6' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+              {codes.map((c, i) => {
+                const odds = latest[c] ?? latest[c.toLowerCase()] ?? '-';
+                return (
+                  <div key={c} style={{ textAlign: 'center', padding: '8px 4px', background: '#faf6ee', borderRadius: 12, border: '1.5px solid #e6ddc6' }}>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: '#9f927d', marginBottom: 3 }}>{labels[i]}</div>
+                    <div style={{ fontSize: 17, fontWeight: 900, color: '#794f27' }}>{odds}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* TTG 总进球赔率网格 */}
+      {oddsTab === 'TTG' && (() => {
+        const raw = oddsHistory?.ttgOddsList;
+        if (!raw?.length) return <div className="card" style={{ textAlign: 'center', padding: 20, color: '#9f927d', fontWeight: 700, fontSize: 12 }}>暂无总进球赔率数据</div>;
+        const latest = parsePoolSnapshot(raw, 'TTG');
+        const goals = ['0', '1', '2', '3', '4', '5', '6', '7+'];
+        return (
+          <div style={{ background: '#fff', borderRadius: 18, padding: 14, border: '2px solid #e6ddc6' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+              {goals.map((g) => {
+                const odds = latest[g] ?? latest[`s${g}`] ?? '-';
+                return (
+                  <div key={g} style={{ textAlign: 'center', padding: '8px 4px', background: '#faf6ee', borderRadius: 12, border: '1.5px solid #e6ddc6' }}>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: '#9f927d', marginBottom: 3 }}>{g} 球</div>
+                    <div style={{ fontSize: 17, fontWeight: 900, color: '#794f27' }}>{odds}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* CRS 比分赔率网格 */}
+      {oddsTab === 'CRS' && (() => {
+        const raw = oddsHistory?.crsOddsList;
+        if (!raw?.length) return <div className="card" style={{ textAlign: 'center', padding: 20, color: '#9f927d', fontWeight: 700, fontSize: 12 }}>暂无比分赔率数据</div>;
+        const latest = parsePoolSnapshot(raw, 'CRS');
+        const homeScores = ['1:0','2:0','2:1','3:0','3:1','3:2','4:0','4:1','4:2'];
+        const drawScores = ['0:0','1:1','2:2','3:3'];
+        const awayScores = ['0:1','0:2','1:2','0:3','1:3','2:3','0:4','1:4','2:4'];
+        const renderScoreGroup = (title, color, scores) => (
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 900, color, marginBottom: 6 }}>{title}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+              {scores.map((s) => {
+                const odds = latest[s] ?? latest[s.replace(':', '')] ?? '-';
+                return (
+                  <div key={s} style={{ textAlign: 'center', padding: '6px 2px', background: '#faf6ee', borderRadius: 10, border: '1.5px solid #e6ddc6' }}>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: '#9f927d', marginBottom: 2 }}>{s}</div>
+                    <div style={{ fontSize: 15, fontWeight: 900, color: '#794f27' }}>{odds}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+        const otherOdds = latest['胜其他'] ?? latest['WIN_OTHER'] ?? latest['other_h'] ?? '-';
+        const drawOtherOdds = latest['平其他'] ?? latest['DRAW_OTHER'] ?? latest['other_d'] ?? '-';
+        const lossOtherOdds = latest['负其他'] ?? latest['LOSS_OTHER'] ?? latest['other_a'] ?? '-';
+        return (
+          <div style={{ background: '#fff', borderRadius: 18, padding: 14, border: '2px solid #e6ddc6' }}>
+            {renderScoreGroup(`${mm.homeTeamName}胜`, '#11a89b', homeScores)}
+            {renderScoreGroup('平局', '#a07e08', drawScores)}
+            {renderScoreGroup(`${mm.awayTeamName}胜`, '#e05a5a', awayScores)}
+            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+              {[['胜其他', otherOdds, '#11a89b'], ['平其他', drawOtherOdds, '#a07e08'], ['负其他', lossOtherOdds, '#e05a5a']].map(([label, odds, color]) => (
+                <div key={label} style={{ flex: 1, textAlign: 'center', padding: '6px 2px', background: '#faf6ee', borderRadius: 10, border: '1.5px solid #e6ddc6' }}>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: '#9f927d', marginBottom: 2 }}>{label}</div>
+                  <div style={{ fontSize: 15, fontWeight: 900, color }}>{odds}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* 玩法开售状态 */}
       <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 12 }}>
         {POOL_CODES.map((code) => (
@@ -368,7 +571,7 @@ export function LotteryDetailScreen({ match }) {
       </div>
 
       {/* 赔率走势 */}
-      {!loading && oddsHistory && (
+      {!loading && oddsHistory && (oddsTab === 'HAD' || oddsTab === 'HHAD') && (
         <>
           <SecH>赔率走势</SecH>
           <div className="card" style={{ padding: '14px 12px' }}>
@@ -591,11 +794,16 @@ export function LotteryDetailScreen({ match }) {
         )}
         {analysis && (
           <>
-            <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 12 }}>
-              {analysis.suggestions?.map((s, i) => (
-                <span key={i} className="chip green" style={{ fontSize: 11 }}>{s}</span>
-              ))}
-            </div>
+            {/* 结构化 picks 展示 (优先) */}
+            {analysis.picks?.length > 0 ? (
+              <PicksPanel picks={analysis.picks} />
+            ) : (
+              <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 12 }}>
+                {analysis.suggestions?.map((s, i) => (
+                  <span key={i} className="chip green" style={{ fontSize: 11 }}>{s}</span>
+                ))}
+              </div>
+            )}
             <div style={{ fontSize: 13, fontWeight: 600, color: '#725d42', lineHeight: 1.75, marginBottom: 14 }}>
               {analysis.reasoning}
             </div>
@@ -615,6 +823,263 @@ export function LotteryDetailScreen({ match }) {
       </div>
 
       <div style={{ height: 8 }} />
+    </div>
+  );
+}
+
+/* ── 结构化注单面板 ── */
+function PicksPanel({ picks }) {
+  const tiers = ['稳健', '均衡', '博胆'];
+  const grouped = {};
+  for (const p of picks) {
+    const t = p.tier || 'unknown';
+    (grouped[t] = grouped[t] || []).push(p);
+  }
+  const orderedKeys = [...tiers.filter((t) => grouped[t]), ...Object.keys(grouped).filter((t) => !tiers.includes(t))];
+  return (
+    <div style={{ marginBottom: 12 }}>
+      {orderedKeys.map((tier) => {
+        const ts = tierStyle(tier);
+        return (
+          <div key={tier} style={{ marginBottom: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+              <span style={{ fontSize: 14 }}>{ts.emoji}</span>
+              <span style={{ fontWeight: 900, fontSize: 13, color: ts.color }}>{tier}档</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#9f927d' }}>{grouped[tier].length} 注</span>
+            </div>
+            {grouped[tier].map((pick, i) => (
+              <div key={i} style={{
+                background: ts.bg, border: `1.5px solid ${ts.border}`, borderRadius: 14,
+                padding: '10px 12px', marginBottom: 6,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, flexWrap: 'wrap' }}>
+                  <span className="chip" style={{ fontSize: 10, padding: '2px 8px', background: '#fff', border: `1.5px solid ${ts.border}` }}>
+                    {POOL_LABEL[pick.poolCode] || pick.poolCode}
+                  </span>
+                  <span style={{ fontWeight: 900, fontSize: 14, color: ts.color }}>{pick.optionLabel}</span>
+                  {pick.odds != null && (
+                    <span style={{ fontSize: 12, fontWeight: 800, color: '#794f27' }}>@ {pick.odds}</span>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: pick.reason ? 4 : 0 }}>
+                  {pick.modelProbability != null && (
+                    <span style={{ fontSize: 10, fontWeight: 800, color: '#9f927d' }}>概率 {(pick.modelProbability * 100).toFixed(0)}%</span>
+                  )}
+                  {pick.ev != null && (
+                    <span style={{ fontSize: 10, fontWeight: 800, color: pick.ev > 0 ? '#6fba2c' : '#e05a5a' }}>EV {pick.ev > 0 ? '+' : ''}{pick.ev.toFixed(2)}</span>
+                  )}
+                  {pick.stakeFraction != null && (
+                    <span style={{ fontSize: 10, fontWeight: 800, color: '#9f927d' }}>仓位 {(pick.stakeFraction * 100).toFixed(0)}%</span>
+                  )}
+                </div>
+                {pick.reason && (
+                  <div style={{ fontSize: 11, fontWeight: 600, color: '#725d42', lineHeight: 1.6 }}>{pick.reason}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ── 解析赔率快照 raw 数据为 { optionCode: odds } ── */
+function parsePoolSnapshot(rawList, poolCode) {
+  if (!rawList?.length) return {};
+  const result = {};
+  // 每条 raw 可能是对象或有不同格式，尝试通用解析
+  for (const item of rawList) {
+    if (!item || typeof item !== 'object') continue;
+    // 格式1: { optionCode, odds } 或 { option, odds }
+    const code = item.optionCode || item.option || item.code || '';
+    const odds = item.odds ?? item.currentOdds;
+    if (code && odds != null) {
+      result[code] = odds;
+      if (item.optionLabel) result[item.optionLabel] = odds;
+    }
+    // 格式2: CRS 快照可能直接用比分做 key
+    for (const [k, v] of Object.entries(item)) {
+      if (typeof v === 'number' || (typeof v === 'string' && /^\d+\.\d+$/.test(v))) {
+        if (!result[k] && k !== 'updateTime' && k !== 'capturedAt') result[k] = v;
+      }
+    }
+  }
+  return result;
+}
+
+/* ── 竞彩战绩页 ── */
+export function LotteryAccuracyScreen() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    api.lotteryAccuracy()
+      .then(setData)
+      .catch((e) => setErr(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return (
+    <div className="screen pop" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
+      <div style={{ fontSize: 44 }}>🎯</div>
+      <div style={{ fontWeight: 800, fontSize: 14, color: '#9f927d' }}>加载竞彩战绩…</div>
+    </div>
+  );
+
+  if (err) return (
+    <div className="screen pop">
+      <div className="card" style={{ textAlign: 'center', padding: 30, color: '#e05a5a', fontWeight: 800 }}>加载失败: {err}</div>
+    </div>
+  );
+
+  if (!data?.length) return (
+    <div className="screen pop">
+      <SecH>竞彩战绩</SecH>
+      <div className="card" style={{ textAlign: 'center', padding: 30 }}>
+        <div style={{ fontSize: 36, marginBottom: 10 }}>🎯</div>
+        <div style={{ fontWeight: 800, fontSize: 14, color: '#9f927d' }}>暂无已对账的竞彩注单</div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: '#c4b89e', marginTop: 6 }}>比赛结束后将自动对账 AI 注单</div>
+      </div>
+    </div>
+  );
+
+  // 聚合
+  const totalGraded = data.reduce((s, b) => s + b.graded, 0);
+  const totalHit = data.reduce((s, b) => s + b.hit, 0);
+  const totalProfit = data.reduce((s, b) => s + b.profit, 0);
+  const totalHitRate = totalGraded ? Math.round((totalHit / totalGraded) * 100) : 0;
+  const totalRoi = totalGraded ? Math.round((totalProfit / totalGraded) * 1000) / 10 : 0;
+
+  // 按 tier 聚合
+  const byTier = {};
+  for (const b of data) {
+    const t = b.tier || 'unknown';
+    if (!byTier[t]) byTier[t] = { graded: 0, hit: 0, profit: 0 };
+    byTier[t].graded += b.graded;
+    byTier[t].hit += b.hit;
+    byTier[t].profit += b.profit;
+  }
+
+  // 按 poolCode 聚合
+  const byPool = {};
+  for (const b of data) {
+    const p = b.poolCode || 'unknown';
+    if (!byPool[p]) byPool[p] = { graded: 0, hit: 0, profit: 0 };
+    byPool[p].graded += b.graded;
+    byPool[p].hit += b.hit;
+    byPool[p].profit += b.profit;
+  }
+
+  // 按 model 聚合
+  const byModel = {};
+  for (const b of data) {
+    const m = `${b.provider}/${b.model}`;
+    if (!byModel[m]) byModel[m] = { graded: 0, hit: 0, profit: 0 };
+    byModel[m].graded += b.graded;
+    byModel[m].hit += b.hit;
+    byModel[m].profit += b.profit;
+  }
+
+  const renderBucketRow = (label, bucket, color) => {
+    const hitRate = bucket.graded ? Math.round((bucket.hit / bucket.graded) * 100) : 0;
+    const roi = bucket.graded ? Math.round((bucket.profit / bucket.graded) * 1000) / 10 : 0;
+    return (
+      <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderBottom: '1.5px dashed #e6ddc6' }}>
+        <span style={{ fontWeight: 900, fontSize: 12, color: color || '#794f27', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: '#9f927d', width: 50, textAlign: 'center' }}>{bucket.hit}/{bucket.graded}</span>
+        <span style={{ fontSize: 12, fontWeight: 900, color: '#11a89b', width: 40, textAlign: 'right' }}>{hitRate}%</span>
+        <span style={{ fontSize: 12, fontWeight: 900, color: roi >= 0 ? '#6fba2c' : '#e05a5a', width: 50, textAlign: 'right' }}>
+          {roi >= 0 ? '+' : ''}{roi}%
+        </span>
+      </div>
+    );
+  };
+
+  return (
+    <div className="screen pop">
+      {/* 总览 */}
+      <SecH>总览</SecH>
+      <div className="card" style={{ padding: 18, textAlign: 'center' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 32, fontWeight: 900, color: '#11a89b', lineHeight: 1 }}>{totalGraded}</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#9f927d', marginTop: 4 }}>已对账注单</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 32, fontWeight: 900, color: '#f5c31c', lineHeight: 1 }}>{totalHit}</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#9f927d', marginTop: 4 }}>命中</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 32, fontWeight: 900, color: '#794f27', lineHeight: 1 }}>{totalHitRate}%</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#9f927d', marginTop: 4 }}>命中率</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 32, fontWeight: 900, color: totalRoi >= 0 ? '#6fba2c' : '#e05a5a', lineHeight: 1 }}>
+              {totalRoi >= 0 ? '+' : ''}{totalRoi}%
+            </div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#9f927d', marginTop: 4 }}>ROI</div>
+          </div>
+        </div>
+        <div style={{ marginTop: 12, padding: '10px 14px', background: '#fff', borderRadius: 14, border: '2px dashed #e6ddc6' }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: '#725d42' }}>
+            累计盈亏 <b style={{ color: totalProfit >= 0 ? '#6fba2c' : '#e05a5a', fontSize: 15 }}>
+              {totalProfit >= 0 ? '+' : ''}{totalProfit.toFixed(2)}
+            </b> 单位
+          </span>
+        </div>
+      </div>
+
+      {/* 按档位 */}
+      <SecH>按策略档位</SecH>
+      <div className="card" style={{ padding: '10px 14px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', marginBottom: 4 }}>
+          <span style={{ flex: 1, fontSize: 10, fontWeight: 800, color: '#c4b89e' }}>档位</span>
+          <span style={{ fontSize: 10, fontWeight: 800, color: '#c4b89e', width: 50, textAlign: 'center' }}>命中/总</span>
+          <span style={{ fontSize: 10, fontWeight: 800, color: '#c4b89e', width: 40, textAlign: 'right' }}>命中率</span>
+          <span style={{ fontSize: 10, fontWeight: 800, color: '#c4b89e', width: 50, textAlign: 'right' }}>ROI</span>
+        </div>
+        {['稳健', '均衡', '博胆'].filter((t) => byTier[t]).map((t) => {
+          const ts = tierStyle(t);
+          return renderBucketRow(`${ts.emoji} ${t}`, byTier[t], ts.color);
+        })}
+        {Object.keys(byTier).filter((t) => !['稳健', '均衡', '博胆'].includes(t)).map((t) =>
+          renderBucketRow(t, byTier[t])
+        )}
+      </div>
+
+      {/* 按玩法 */}
+      <SecH>按玩法</SecH>
+      <div className="card" style={{ padding: '10px 14px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', marginBottom: 4 }}>
+          <span style={{ flex: 1, fontSize: 10, fontWeight: 800, color: '#c4b89e' }}>玩法</span>
+          <span style={{ fontSize: 10, fontWeight: 800, color: '#c4b89e', width: 50, textAlign: 'center' }}>命中/总</span>
+          <span style={{ fontSize: 10, fontWeight: 800, color: '#c4b89e', width: 40, textAlign: 'right' }}>命中率</span>
+          <span style={{ fontSize: 10, fontWeight: 800, color: '#c4b89e', width: 50, textAlign: 'right' }}>ROI</span>
+        </div>
+        {POOL_CODES.filter((c) => byPool[c]).map((c) =>
+          renderBucketRow(POOL_LABEL[c], byPool[c])
+        )}
+      </div>
+
+      {/* 按模型 */}
+      {Object.keys(byModel).length > 1 && (
+        <>
+          <SecH>按模型</SecH>
+          <div className="card" style={{ padding: '10px 14px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', marginBottom: 4 }}>
+              <span style={{ flex: 1, fontSize: 10, fontWeight: 800, color: '#c4b89e' }}>模型</span>
+              <span style={{ fontSize: 10, fontWeight: 800, color: '#c4b89e', width: 50, textAlign: 'center' }}>命中/总</span>
+              <span style={{ fontSize: 10, fontWeight: 800, color: '#c4b89e', width: 40, textAlign: 'right' }}>命中率</span>
+              <span style={{ fontSize: 10, fontWeight: 800, color: '#c4b89e', width: 50, textAlign: 'right' }}>ROI</span>
+            </div>
+            {Object.entries(byModel).map(([m, b]) =>
+              renderBucketRow(`🤖 ${m}`, b)
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

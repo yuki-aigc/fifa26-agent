@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { eq } from 'drizzle-orm';
 import { buildApp } from '../index.js';
 import { db } from '../db/client.js';
-import { lotteryMatches } from '../db/schema.js';
+import { lotteryAnalyses, lotteryMatches, lotteryOddsSnapshots, lotteryPicks } from '../db/schema.js';
 import { resetMetricsForTest } from '../observability/metrics.js';
 
 const routeTestFiroMatchId = 909900001;
@@ -17,6 +17,9 @@ describe('routes observability', () => {
   });
 
   afterEach(async () => {
+    await db.delete(lotteryPicks).where(eq(lotteryPicks.firoMatchId, routeTestFiroMatchId));
+    await db.delete(lotteryAnalyses).where(eq(lotteryAnalyses.firoMatchId, routeTestFiroMatchId));
+    await db.delete(lotteryOddsSnapshots).where(eq(lotteryOddsSnapshots.firoMatchId, routeTestFiroMatchId));
     await db.delete(lotteryMatches).where(eq(lotteryMatches.firoMatchId, routeTestFiroMatchId));
     await app.close();
   });
@@ -90,5 +93,112 @@ describe('routes observability', () => {
 
     expect(res.statusCode).toBe(200);
     expect(Array.isArray(body.summary)).toBe(true);
+  });
+
+  it('returns persisted latest lottery analysis in match detail', async () => {
+    await db.insert(lotteryMatches).values({
+      firoMatchId: routeTestFiroMatchId,
+      matchId: null,
+      matchNumStr: '周五001',
+      matchDate: '2099-01-01',
+      matchStartDate: '2099-01-01',
+      matchTime: '03:00',
+      leagueName: '世界杯',
+      leagueShort: '世界杯',
+      homeTeamName: '加拿大',
+      awayTeamName: '波黑',
+      matchStatus: 'Selling',
+      sellStatus: 'Selling',
+      poolStatus: [],
+      raw: {
+        matchMain: {
+          matchId: routeTestFiroMatchId,
+          matchNum: 1,
+          matchNumStr: '周五001',
+          matchDate: '2099-01-01',
+          matchStartDate: '2099-01-01',
+          matchTime: '03:00',
+          leagueName: '世界杯',
+          leagueShort: '世界杯',
+          homeTeamName: '加拿大',
+          awayTeamName: '波黑',
+        },
+        matchOddsList: [],
+        matchPoolList: [],
+      },
+    }).onConflictDoNothing();
+    const inserted = await db.insert(lotteryAnalyses).values({
+      firoMatchId: routeTestFiroMatchId,
+      matchId: null,
+      provider: 'openai',
+      model: 'test-model',
+      recommendation: '稳健主胜',
+      confidence: 72,
+      reasoning: '测试分析已落库。',
+      raw: { suggestions: ['HAD: 主胜'] },
+    }).returning();
+    await db.insert(lotteryPicks).values({
+      analysisId: inserted[0].id,
+      firoMatchId: routeTestFiroMatchId,
+      matchId: null,
+      tier: '稳健',
+      poolCode: 'HAD',
+      optionCode: 'HOME',
+      optionLabel: '主胜',
+      odds: 1.8,
+      reason: '测试理由',
+      raw: {},
+    });
+    const oddsTime = new Date();
+    await db.insert(lotteryOddsSnapshots).values([
+      {
+        firoMatchId: routeTestFiroMatchId,
+        matchId: null,
+        poolCode: 'HAD',
+        optionCode: 'HOME',
+        optionLabel: '主胜',
+        odds: 1.8,
+        updateTime: oddsTime,
+        capturedAt: oddsTime,
+        raw: {},
+      },
+      {
+        firoMatchId: routeTestFiroMatchId,
+        matchId: null,
+        poolCode: 'HAD',
+        optionCode: 'DRAW',
+        optionLabel: '平',
+        odds: 3.2,
+        updateTime: oddsTime,
+        capturedAt: oddsTime,
+        raw: {},
+      },
+      {
+        firoMatchId: routeTestFiroMatchId,
+        matchId: null,
+        poolCode: 'HAD',
+        optionCode: 'AWAY',
+        optionLabel: '客胜',
+        odds: 4.1,
+        updateTime: oddsTime,
+        capturedAt: oddsTime,
+        raw: {},
+      },
+    ]);
+
+    const res = await app.inject({ method: 'GET', url: `/api/lottery/matches/${routeTestFiroMatchId}` });
+    const body = res.json();
+
+    expect(res.statusCode).toBe(200);
+    expect(body.info).toBeNull();
+    expect(body.oddsHistory.hadOddsList).toHaveLength(1);
+    expect(body.latestAnalysis).toMatchObject({
+      analysisId: inserted[0].id,
+      recommendation: '稳健主胜',
+      confidence: 72,
+      suggestions: ['HAD: 主胜'],
+    });
+    expect(body.latestAnalysis.picks).toHaveLength(1);
+    expect(body.latestAnalysis.picks[0]).toMatchObject({ tier: '稳健', poolCode: 'HAD', optionLabel: '主胜' });
   });
 });

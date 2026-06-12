@@ -46,7 +46,8 @@ export const config = {
     odds: env('SYNC_ODDS', 'true') === 'true',
     firoEnabled: env('FIRO_SYNC_ENABLED', 'false') === 'true',
     firoIntervalMin: Number(env('FIRO_SYNC_INTERVAL_MIN', '30')),
-    firoDays: Number(env('FIRO_SYNC_DAYS', '7')),
+    firoDays: Number(env('FIRO_SYNC_DAYS', '2')),
+    firoDetailTtlMin: Number(env('FIRO_DETAIL_TTL_MIN', '10')),
   },
 } as const;
 

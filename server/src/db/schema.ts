@@ -270,6 +270,44 @@ export const predictions = sqliteTable(
   }),
 );
 
+/* ── Prediction runs (immutable AI/engine prediction history) ── */
+export const predictionRuns = sqliteTable(
+  'prediction_runs',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    matchId: text('match_id').notNull().references(() => matches.id),
+    engine: text('engine').notNull(), // 'elo' | 'ai'
+    provider: text('provider'),
+    model: text('model'),
+    promptVersion: text('prompt_version').notNull().default('v1'),
+    win: integer('win').notNull(),
+    draw: integer('draw').notNull(),
+    loss: integer('loss').notNull(),
+    predScoreHome: integer('pred_score_home').notNull(),
+    predScoreAway: integer('pred_score_away').notNull(),
+    confidence: integer('confidence').notNull(),
+    keyFactors: text('key_factors', { mode: 'json' }).$type<string[]>().notNull().default(sql`'[]'`),
+    reasoning: text('reasoning').notNull().default(''),
+    inputSnapshot: text('input_snapshot', { mode: 'json' }).$type<unknown>().notNull().default(sql`'{}'`),
+    kickoffAt: integer('kickoff_at', { mode: 'timestamp_ms' }),
+    phase: text('phase').notNull().default('pre_match'), // pre_match | live | post_match
+    eligibleForAccuracy: integer('eligible_for_accuracy', { mode: 'boolean' }).notNull().default(false),
+    isLatestEligible: integer('is_latest_eligible', { mode: 'boolean' }).notNull().default(false),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().default(sql`(unixepoch() * 1000)`),
+    correctOutcome: integer('correct_outcome', { mode: 'boolean' }),
+    correctScore: integer('correct_score', { mode: 'boolean' }),
+    brierScore: real('brier_score'),
+    logLoss: real('log_loss'),
+    gradedAt: integer('graded_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => ({
+    byMatch: index('prediction_runs_match_idx').on(t.matchId),
+    byModel: index('prediction_runs_model_idx').on(t.engine, t.provider, t.model),
+    byLatestEligible: index('prediction_runs_latest_eligible_idx').on(t.matchId, t.engine, t.provider, t.model, t.isLatestEligible),
+    byCreated: index('prediction_runs_created_idx').on(t.createdAt),
+  }),
+);
+
 /* ── Head-to-head (真实历史交锋) ──────────────────────────
    规范化存储: aCode < bCode (字典序), 读取时按主队视角翻转。
    来源 API-Football /fixtures/headtohead。 */
@@ -310,6 +348,7 @@ export type TeamRow = typeof teams.$inferSelect;
 export type PlayerRow = typeof players.$inferSelect;
 export type MatchRow = typeof matches.$inferSelect;
 export type PredictionRow = typeof predictions.$inferSelect;
+export type PredictionRunRow = typeof predictionRuns.$inferSelect;
 export type MatchStatsRow = typeof matchStats.$inferSelect;
 export type InjuryRow = typeof injuries.$inferSelect;
 export type OddsRow = typeof odds.$inferSelect;

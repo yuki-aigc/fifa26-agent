@@ -1,7 +1,8 @@
-import { desc, eq } from 'drizzle-orm';
+import { asc, desc, eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
   lotteryAnalyses,
+  matches as matchesTable,
   lotteryMatches,
   lotteryOddsSnapshots,
   lotteryPicks,
@@ -79,6 +80,18 @@ function oddsUpdateTime(raw: unknown, fallback = new Date(0)): Date {
 
 function isFiroMatchItem(raw: unknown): raw is FiroMatchItem {
   return isRecord(raw) && isRecord(raw.matchMain) && Array.isArray(raw.matchOddsList) && Array.isArray(raw.matchPoolList);
+}
+
+function toScore(v: unknown): number | null {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && v !== '' ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+function mapFiroEventStatus(status: string | null | undefined): 'scheduled' | 'live' | 'finished' {
+  const s = String(status ?? '').toUpperCase();
+  if (['FT', 'AET', 'PEN', 'WO'].includes(s)) return 'finished';
+  if (['1H', '2H', 'HT', 'ET', 'BT', 'P', 'LIVE', 'INT'].includes(s)) return 'live';
+  return 'scheduled';
 }
 
 function poolOptionLabel(poolCode: string, optionCode: string): string {
@@ -333,6 +346,17 @@ export async function upsertLotteryMatch(item: FiroMatchItem, matchId: string | 
 
 export async function upsertLotteryEvent(event: FiroSoccerEvent, matchId: string | null): Promise<void> {
   if (!event.matchId) return;
+  if (matchId) {
+    await db
+      .update(matchesTable)
+      .set({
+        status: mapFiroEventStatus(event.strStatus),
+        homeScore: toScore(event.intHomeScore),
+        awayScore: toScore(event.intAwayScore),
+        updatedAt: new Date(),
+      })
+      .where(eq(matchesTable.id, matchId));
+  }
   await db
     .insert(lotteryMatches)
     .values({
@@ -392,6 +416,101 @@ export async function upsertWorldCupLotteryItems(items: FiroMatchItem[]): Promis
   return { matches, result: { raw: items.length, stored: matches.length, filteredOut, oddsSnapshots } };
 }
 
+function latestThreeWayOdds(
+  firoMatchId: number,
+  poolCode: string,
+  rows: LotteryOddsSnapshotRow[],
+): FiroOddsEntry | null {
+  const poolRows = rows.filter((r) => r.poolCode === poolCode);
+  if (!poolRows.length) return null;
+  const latest = poolRows.reduce((best, row) => (row.updateTime > best.updateTime ? row : best), poolRows[0]);
+  const latestKey = `${latest.goalLine}|${latest.updateTime.getTime()}`;
+  if (!latestKey) return null;
+  const group = poolRows.filter((r) => `${r.goalLine}|${r.updateTime.getTime()}` === latestKey);
+  const byOption = new Map(group.map((r) => [r.optionCode, r]));
+  const home = byOption.get('HOME');
+  const draw = byOption.get('DRAW');
+  const away = byOption.get('AWAY');
+  if (!home || !draw || !away) return null;
+  return {
+    matchId: firoMatchId,
+    poolCode,
+    homeOdds: home.odds,
+    drawOdds: draw.odds,
+    awayOdds: away.odds,
+    goalLine: home.goalLine,
+    updateTime: home.updateTime.toISOString(),
+  };
+}
+
+async function listOddsForMatch(firoMatchId: number): Promise<FiroOddsEntry[]> {
+  const rows = await db
+    .select()
+    .from(lotteryOddsSnapshots)
+    .where(eq(lotteryOddsSnapshots.firoMatchId, firoMatchId))
+    .orderBy(desc(lotteryOddsSnapshots.updateTime));
+  return [
+    latestThreeWayOdds(firoMatchId, 'HAD', rows),
+    latestThreeWayOdds(firoMatchId, 'HHAD', rows),
+  ].filter((x): x is FiroOddsEntry => !!x);
+}
+
+async function rowToMatchItem(row: LotteryMatchRow): Promise<FiroMatchItem> {
+  const odds = await listOddsForMatch(row.firoMatchId);
+  const rawScore = isRecord(row.raw)
+    ? {
+        homeScore: toScore(row.raw.intHomeScore),
+        awayScore: toScore(row.raw.intAwayScore),
+      }
+    : { homeScore: null, awayScore: null };
+
+  if (isFiroMatchItem(row.raw)) {
+    return {
+      ...row.raw,
+      matchMain: {
+        ...row.raw.matchMain,
+        matchStatus: row.matchStatus || row.raw.matchMain.matchStatus,
+        sellStatus: row.sellStatus || row.raw.matchMain.sellStatus,
+        homeScore: rawScore.homeScore,
+        awayScore: rawScore.awayScore,
+      } as FiroMatchItem['matchMain'],
+      matchOddsList: row.raw.matchOddsList?.length ? row.raw.matchOddsList : odds,
+      matchPoolList: Array.isArray(row.poolStatus) ? row.poolStatus as FiroMatchItem['matchPoolList'] : row.raw.matchPoolList,
+    };
+  }
+
+  return {
+    matchMain: {
+      matchId: row.firoMatchId,
+      matchNum: 0,
+      matchNumStr: row.matchNumStr,
+      matchDate: row.matchDate,
+      matchStartDate: row.matchStartDate,
+      matchTime: row.matchTime,
+      sportType: '足球',
+      leagueId: '',
+      leagueName: row.leagueName,
+      leagueShort: row.leagueShort,
+      homeTeamId: 0,
+      homeTeamName: row.homeTeamName,
+      homeTeamBadgeUrl: isRecord(row.raw) ? String(row.raw.homeStrBadgeUrl ?? '') : '',
+      awayTeamId: 0,
+      awayTeamName: row.awayTeamName,
+      awayTeamBadgeUrl: isRecord(row.raw) ? String(row.raw.awayStrBadgeUrl ?? '') : '',
+      matchStatus: row.matchStatus,
+      sellStatus: row.sellStatus,
+      weekday: '',
+      totalMatches: 0,
+      createTime: 0,
+      updateTime: row.updatedAt.toISOString(),
+      homeScore: rawScore.homeScore,
+      awayScore: rawScore.awayScore,
+    } as FiroMatchItem['matchMain'],
+    matchOddsList: odds,
+    matchPoolList: Array.isArray(row.poolStatus) ? row.poolStatus as FiroMatchItem['matchPoolList'] : [],
+  };
+}
+
 export async function listStoredLotteryMatches(date?: string): Promise<FiroMatchItem[]> {
   const where = date ? eq(lotteryMatches.matchStartDate, date) : undefined;
   const rows = await db
@@ -399,13 +518,13 @@ export async function listStoredLotteryMatches(date?: string): Promise<FiroMatch
     .from(lotteryMatches)
     .where(where)
     .orderBy(lotteryMatches.matchStartDate, lotteryMatches.matchTime);
-  return rows.map((row) => row.raw).filter(isFiroMatchItem);
+  return Promise.all(rows.map(rowToMatchItem));
 }
 
 export async function getStoredLotteryMatch(firoMatchId: number): Promise<LotteryStoredDetail | null> {
   const row = (await db.select().from(lotteryMatches).where(eq(lotteryMatches.firoMatchId, firoMatchId)).limit(1))[0];
   if (!row) return null;
-  return { row, match: isFiroMatchItem(row.raw) ? row.raw : null };
+  return { row, match: await rowToMatchItem(row) };
 }
 
 function snapshotToRecord(group: LotteryOddsSnapshotRow[]): FiroOddsRecord | null {
@@ -455,6 +574,16 @@ export async function buildStoredOddsHistory(firoMatchId: number): Promise<FiroO
     ttgOddsList: rows.filter((r) => r.poolCode === 'TTG').map((r) => r.raw),
     crsOddsList: rows.filter((r) => r.poolCode === 'CRS').map((r) => r.raw),
   };
+}
+
+export async function latestLotteryOddsCapturedAt(firoMatchId: number): Promise<Date | null> {
+  const row = (await db
+    .select({ capturedAt: lotteryOddsSnapshots.capturedAt })
+    .from(lotteryOddsSnapshots)
+    .where(eq(lotteryOddsSnapshots.firoMatchId, firoMatchId))
+    .orderBy(desc(lotteryOddsSnapshots.capturedAt))
+    .limit(1))[0];
+  return row?.capturedAt ?? null;
 }
 
 function normalizePick(pick: LotteryPickSuggestion, fallbackIndex: number) {
@@ -513,4 +642,43 @@ export async function latestLotteryAnalysis(firoMatchId: number): Promise<Lotter
     .orderBy(desc(lotteryAnalyses.createdAt))
     .limit(1);
   return rows[0] ?? null;
+}
+
+export async function latestLotteryAnalysisResult(
+  firoMatchId: number,
+): Promise<(LotteryAnalysisResult & { analysisId: number; createdAt: Date }) | null> {
+  const analysis = await latestLotteryAnalysis(firoMatchId);
+  if (!analysis) return null;
+  const pickRows = await db
+    .select()
+    .from(lotteryPicks)
+    .where(eq(lotteryPicks.analysisId, analysis.id))
+    .orderBy(asc(lotteryPicks.id));
+  const picks: LotteryPickSuggestion[] = pickRows.map((p) => ({
+    tier: p.tier,
+    poolCode: p.poolCode,
+    optionCode: p.optionCode,
+    optionLabel: p.optionLabel,
+    odds: p.odds,
+    modelProbability: p.modelProbability,
+    ev: p.ev,
+    stakeFraction: p.stakeFraction,
+    reason: p.reason,
+  }));
+  const raw = analysis.raw && typeof analysis.raw === 'object' ? analysis.raw as { suggestions?: unknown } : {};
+  const suggestions = Array.isArray(raw.suggestions)
+    ? raw.suggestions.slice(0, 5).map(String)
+    : picks.slice(0, 5).map((p) => `${p.poolCode}: ${p.optionLabel}`);
+  return {
+    matchId: firoMatchId,
+    suggestions,
+    recommendation: analysis.recommendation,
+    confidence: analysis.confidence,
+    reasoning: analysis.reasoning,
+    model: analysis.model,
+    provider: analysis.provider,
+    picks,
+    analysisId: analysis.id,
+    createdAt: analysis.createdAt,
+  };
 }

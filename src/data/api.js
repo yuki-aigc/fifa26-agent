@@ -25,6 +25,8 @@ export const api = {
   matches: (opts) => get('/api/matches', opts).then((d) => d.matches),
   prediction: (id, { ai = false, refresh = false, signal } = {}) =>
     get(`/api/matches/${id}/prediction?ai=${ai ? 1 : 0}${refresh ? '&refresh=1' : ''}`, { signal }),
+  predictionHistory: (id, opts) => get(`/api/matches/${id}/prediction/history`, opts).then((d) => d.runs),
+  latestPredictionRuns: (id, opts) => get(`/api/matches/${id}/prediction/latest`, opts).then((d) => d.runs),
 
   predictionStream: (id, { refresh = false, onEvent, signal } = {}) => {
     return new Promise((resolve, reject) => {
@@ -58,6 +60,8 @@ export const api = {
   lotteryMatches: (opts) => get('/api/lottery/matches', opts).then((d) => d.matches),
   lotteryMatch: (id, opts) => get(`/api/lottery/matches/${id}`, opts),
   lotteryAnalysis: (id, opts) => get(`/api/lottery/matches/${id}/analysis`, opts),
+
+  lotteryAccuracy: (opts) => get('/api/lottery/accuracy', opts).then((d) => d.summary),
 
   lotteryAnalysisStream: (id, { onEvent, signal } = {}) => {
     return new Promise((resolve, reject) => {

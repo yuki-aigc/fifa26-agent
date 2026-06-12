@@ -15,6 +15,15 @@ describe('api client', () => {
     await expect(api.lotteryMatches()).resolves.toEqual([{ matchMain: { matchId: 1 } }]);
   });
 
+  it('returns prediction history runs from the backend payload', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ runs: [{ id: 1, isLatestEligible: true }] }),
+    });
+
+    await expect(api.predictionHistory('match-1')).resolves.toEqual([{ id: 1, isLatestEligible: true }]);
+  });
+
   it('throws a readable error when backend response is not ok', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: false,

@@ -1,6 +1,6 @@
-import { and, eq, isNotNull } from 'drizzle-orm';
+import { and, desc, eq, isNotNull } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { lotteryAnalyses, lotteryPicks, matches } from '../db/schema.js';
+import { lotteryAnalyses, lotteryOddsSnapshots, lotteryPicks, matches } from '../db/schema.js';
 import type { LotteryPickRow, MatchRow } from '../db/schema.js';
 
 type Outcome = 'HOME' | 'DRAW' | 'AWAY';
@@ -32,6 +32,16 @@ function normalizeOutcomeOption(pick: LotteryPickRow): Outcome | null {
   return null;
 }
 
+function pickGoalLine(pick: LotteryPickRow): number | null {
+  const rawLine = (pick.raw as { goalLine?: unknown })?.goalLine;
+  const fromRaw = typeof rawLine === 'number' ? rawLine : typeof rawLine === 'string' && rawLine !== '' ? Number(rawLine) : NaN;
+  if (Number.isFinite(fromRaw)) return fromRaw;
+  const text = `${pick.optionCode} ${pick.optionLabel} ${pick.reason}`;
+  const match = text.match(/[（(]\s*([+-]?\d+(?:\.\d+)?)\s*[）)]|让\s*([+-]?\d+(?:\.\d+)?)/);
+  const parsed = Number(match?.[1] ?? match?.[2]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function gradeHad(match: MatchRow, pick: LotteryPickRow): boolean | null {
   const actual = actualOutcome(match);
   const selected = normalizeOutcomeOption(pick);
@@ -40,8 +50,8 @@ function gradeHad(match: MatchRow, pick: LotteryPickRow): boolean | null {
 
 function gradeHhad(match: MatchRow, pick: LotteryPickRow): boolean | null {
   if (match.homeScore == null || match.awayScore == null) return null;
-  const line = Number((pick.raw as { goalLine?: unknown })?.goalLine ?? '');
-  if (!Number.isFinite(line)) return null;
+  const line = pickGoalLine(pick);
+  if (line == null) return null;
   const adjustedHome = match.homeScore + line;
   const actual: Outcome = adjustedHome > match.awayScore ? 'HOME' : adjustedHome < match.awayScore ? 'AWAY' : 'DRAW';
   const selected = normalizeOutcomeOption(pick);
@@ -52,6 +62,8 @@ function gradeTtg(match: MatchRow, pick: LotteryPickRow): boolean | null {
   if (match.homeScore == null || match.awayScore == null) return null;
   const total = match.homeScore + match.awayScore;
   const raw = `${pick.optionCode} ${pick.optionLabel}`;
+  const range = raw.match(/(\d+)\s*[-~到至]\s*(\d+)/);
+  if (range) return total >= Number(range[1]) && total <= Number(range[2]);
   const plus = raw.match(/(\d+)\s*\+/);
   if (plus) return total >= Number(plus[1]);
   const n = raw.match(/\d+/);
@@ -89,7 +101,10 @@ export async function gradeLotteryMatch(matchId: string): Promise<number> {
   let graded = 0;
   const touchedAnalyses = new Set<number>();
   for (const pick of picks) {
-    const hit = gradeLotteryPick(match, pick);
+    const enriched = pick.poolCode === 'HHAD' && pickGoalLine(pick) == null
+      ? await withLatestGoalLine(pick)
+      : pick;
+    const hit = gradeLotteryPick(match, enriched);
     if (hit == null) continue;
     const profit = pick.odds && pick.odds > 0 ? (hit ? pick.odds - 1 : -1) : null;
     await db
@@ -102,6 +117,16 @@ export async function gradeLotteryMatch(matchId: string): Promise<number> {
 
   for (const analysisId of touchedAnalyses) await refreshAnalysisRoi(analysisId);
   return graded;
+}
+
+async function withLatestGoalLine(pick: LotteryPickRow): Promise<LotteryPickRow> {
+  const line = (await db
+    .select({ goalLine: lotteryOddsSnapshots.goalLine })
+    .from(lotteryOddsSnapshots)
+    .where(and(eq(lotteryOddsSnapshots.firoMatchId, pick.firoMatchId), eq(lotteryOddsSnapshots.poolCode, 'HHAD')))
+    .orderBy(desc(lotteryOddsSnapshots.updateTime))
+    .limit(1))[0]?.goalLine;
+  return line ? { ...pick, raw: { ...(pick.raw as object), goalLine: line } } : pick;
 }
 
 export async function gradeAllLotteryFinished(): Promise<number> {
