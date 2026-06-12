@@ -7,14 +7,49 @@ import { accuracySummary } from '../services/accuracy.js';
 import { aiInfo, aiKeyAvailable } from '../ai/pi.js';
 import { config } from '../config.js';
 import { sqlite } from '../db/client.js';
-import { fetchLotteryList, fetchLotteryOdds, fetchFootballInfo, firoAvailable } from '../ingest/sources/firoApi.js';
+import { fetchLotteryAllList, fetchLotteryList, fetchLotteryOdds, fetchFootballInfo, firoAvailable } from '../ingest/sources/firoApi.js';
 import { analyzeLotteryMatch, streamLotteryAnalysis } from '../services/lotteryAnalysis.js';
 import { addLotteryMatchesServed, metricsSnapshot } from '../observability/metrics.js';
 import { evaluateAlertStatus } from '../observability/alerts.js';
 import { onMatchEvent } from '../services/eventBus.js';
 import { runTournamentSimulation } from '../services/tournament.js';
+import {
+  buildStoredOddsHistory,
+  getStoredLotteryMatch,
+  listStoredLotteryMatches,
+  persistLotteryAnalysis,
+  upsertLotteryOddsHistory,
+  upsertWorldCupLotteryItems,
+} from '../services/lotteryStore.js';
+import { lotteryAccuracySummary } from '../services/lotteryAccuracy.js';
 
 export async function registerRoutes(app: FastifyInstance) {
+  async function fetchWorldCupLotteryMatches(date?: string, refresh = false) {
+    const stored = await listStoredLotteryMatches(date);
+    if (!refresh && stored.length > 0) return stored;
+
+    if (!firoAvailable()) return stored;
+
+    try {
+      const rows = date ? await fetchLotteryAllList(date) : await fetchLotteryList();
+      const { matches } = await upsertWorldCupLotteryItems(rows);
+      return matches.length ? matches : stored;
+    } catch (err) {
+      app.log.warn({ err, date }, 'lottery_matches_refresh_failed');
+      return stored;
+    }
+  }
+
+  async function loadLotteryMatch(firoMatchId: number, refresh = false) {
+    const stored = await getStoredLotteryMatch(firoMatchId);
+    if (!refresh && stored?.match) return stored;
+
+    const refreshed = await fetchWorldCupLotteryMatches(undefined, refresh);
+    const match = refreshed.find((m) => m.matchMain.matchId === firoMatchId);
+    if (match) return getStoredLotteryMatch(firoMatchId);
+    return stored;
+  }
+
   app.get('/health', async () => {
     let dbOk = true;
     try {
@@ -41,6 +76,9 @@ export async function registerRoutes(app: FastifyInstance) {
         intervalMin: config.sync.intervalMin,
         mode: config.sync.mode,
         apiFootballKey: !!config.apiFootball.key,
+        firoEnabled: config.sync.firoEnabled,
+        firoIntervalMin: config.sync.firoIntervalMin,
+        firoDays: config.sync.firoDays,
       },
       firo: { keyConfigured: firoAvailable() },
       metrics: {
@@ -179,22 +217,42 @@ export async function registerRoutes(app: FastifyInstance) {
   });
 
   /* ── Lottery (竞彩数据 via Firo API) ── */
-  app.get('/api/lottery/matches', async (_req, reply) => {
-    if (!firoAvailable()) return reply.code(503).send({ error: 'firo_not_configured' });
-    const matches = await fetchLotteryList();
+  app.get<{ Querystring: { date?: string; refresh?: string } }>('/api/lottery/matches', async (req, reply) => {
+    const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
+    const matches = await fetchWorldCupLotteryMatches(req.query.date, refresh);
+    if (!matches.length && !firoAvailable()) return reply.code(503).send({ error: 'firo_not_configured' });
     addLotteryMatchesServed(matches.length);
     return { matches };
   });
 
-  app.get<{ Params: { id: string } }>('/api/lottery/matches/:id', async (req, reply) => {
-    if (!firoAvailable()) return reply.code(503).send({ error: 'firo_not_configured' });
+  app.get('/api/lottery/accuracy', async () => {
+    return { summary: await lotteryAccuracySummary() };
+  });
+
+  app.get<{ Params: { id: string }; Querystring: { refresh?: string } }>('/api/lottery/matches/:id', async (req, reply) => {
     const matchId = Number(req.params.id);
     if (!matchId) return reply.code(400).send({ error: 'invalid_match_id' });
-    const [info, oddsHistory] = await Promise.all([
-      fetchFootballInfo(matchId),
-      fetchLotteryOdds(matchId),
-    ]);
-    return { matchId, info, oddsHistory };
+    const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
+    const stored = await loadLotteryMatch(matchId, refresh);
+    if (!stored) return reply.code(404).send({ error: 'world_cup_match_not_found' });
+
+    let info = null;
+    let oddsHistory = await buildStoredOddsHistory(matchId);
+    if (firoAvailable()) {
+      try {
+        const [nextInfo, nextOddsHistory] = await Promise.all([
+          fetchFootballInfo(matchId),
+          fetchLotteryOdds(matchId),
+        ]);
+        info = nextInfo;
+        oddsHistory = nextOddsHistory;
+        await upsertLotteryOddsHistory(matchId, stored.row.matchId, nextOddsHistory);
+      } catch (err) {
+        app.log.warn({ err, matchId }, 'lottery_detail_firo_refresh_failed');
+      }
+    }
+
+    return { matchId, match: stored.match, info, oddsHistory };
   });
 
   app.get<{ Params: { id: string } }>('/api/lottery/matches/:id/analysis', async (req, reply) => {
@@ -202,18 +260,23 @@ export async function registerRoutes(app: FastifyInstance) {
     const matchId = Number(req.params.id);
     if (!matchId) return reply.code(400).send({ error: 'invalid_match_id' });
 
-    // 拉全量数据 (赛程列表 + 单场数据)
-    const [matches, info, oddsHistory] = await Promise.all([
-      fetchLotteryList(),
+    // 只从世界杯过滤后的竞彩列表中查找单场。
+    const stored = await loadLotteryMatch(matchId);
+    if (!stored?.match) return reply.code(404).send({ error: 'world_cup_match_not_found' });
+
+    const [info, oddsHistory] = await Promise.all([
       fetchFootballInfo(matchId),
       fetchLotteryOdds(matchId),
     ]);
-    const match = matches.find((m) => m.matchMain.matchId === matchId);
-    if (!match) return reply.code(404).send({ error: 'match_not_found_in_lottery_list' });
-
-    const result = await analyzeLotteryMatch(match, info, oddsHistory);
+    await upsertLotteryOddsHistory(matchId, stored.row.matchId, oddsHistory);
+    const result = await analyzeLotteryMatch(stored.match, info, oddsHistory);
     if (!result) return reply.code(503).send({ error: 'ai_not_available' });
-    return result;
+    const analysis = await persistLotteryAnalysis({
+      result,
+      firoMatchId: matchId,
+      matchId: stored.row.matchId,
+    });
+    return { ...result, analysisId: analysis.id };
   });
 
   /* ── SSE: 竞彩 AI 流式分析 ── */
@@ -231,21 +294,30 @@ export async function registerRoutes(app: FastifyInstance) {
       ...(origin ? { 'Access-Control-Allow-Origin': origin } : {}),
     });
 
-    const [matches, info, oddsHistory] = await Promise.all([
-      fetchLotteryList(),
-      fetchFootballInfo(matchId),
-      fetchLotteryOdds(matchId),
-    ]);
-    const match = matches.find((m) => m.matchMain.matchId === matchId);
-    if (!match) {
-      reply.raw.write(`data: ${JSON.stringify({ type: 'error', message: 'match_not_found' })}\n\n`);
+    const stored = await loadLotteryMatch(matchId);
+    if (!stored?.match) {
+      reply.raw.write(`data: ${JSON.stringify({ type: 'error', message: 'world_cup_match_not_found' })}\n\n`);
       reply.raw.end();
       return;
     }
 
+    const [info, oddsHistory] = await Promise.all([
+      fetchFootballInfo(matchId),
+      fetchLotteryOdds(matchId),
+    ]);
+    await upsertLotteryOddsHistory(matchId, stored.row.matchId, oddsHistory);
+
     const write = (event: object) => reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
     try {
-      for await (const event of streamLotteryAnalysis(match, info, oddsHistory)) {
+      for await (const event of streamLotteryAnalysis(stored.match, info, oddsHistory)) {
+        if (event.type === 'analysis') {
+          const analysis = await persistLotteryAnalysis({
+            result: event.analysis,
+            firoMatchId: matchId,
+            matchId: stored.row.matchId,
+          });
+          event.analysis = { ...event.analysis, analysisId: analysis.id } as typeof event.analysis;
+        }
         write(event);
       }
     } catch (err) {

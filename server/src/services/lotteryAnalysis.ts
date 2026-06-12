@@ -17,11 +17,25 @@ export interface LotteryAnalysisResult {
   reasoning: string;
   model: string;
   provider: string;
+  picks?: LotteryPickSuggestion[];
+}
+
+export interface LotteryPickSuggestion {
+  tier: '稳健' | '均衡' | '博胆' | string;
+  poolCode: string;
+  optionCode?: string;
+  optionLabel: string;
+  odds?: number | null;
+  modelProbability?: number | null;
+  ev?: number | null;
+  stakeFraction?: number | null;
+  reason: string;
 }
 
 const SYSTEM_PROMPT = `你是一名专业的竞彩足球数据分析师，擅长分析中国体育彩票竞彩赛事。
 你会收到一场竞彩比赛的实时赔率、赔率走势、双方历史交锋数据、主客场表现、近期状态和伤停情报。
 请综合以上信息，给出针对竞彩各玩法（胜平负/让球/半全场/总进球/比分）的专业购买建议。
+建议必须尽量结构化为注单 picks，并按「稳健/均衡/博胆」标注档位；没有模型概率或 EV 时可填 null。
 务必通过 submit_lottery_analysis 工具返回结构化结果。所有文本用简体中文。`;
 
 function buildPrompt(
@@ -108,6 +122,25 @@ const analysisToolDef = {
         type: 'string',
         description: '详细分析理由，200字以内，结合赔率走势、历史数据说明',
       },
+      picks: {
+        type: 'array',
+        description: '结构化注单建议。没有 EV 或模型概率时相关字段可省略。',
+        items: {
+          type: 'object',
+          properties: {
+            tier: { type: 'string', description: '稳健/均衡/博胆' },
+            poolCode: { type: 'string', description: '玩法代码，如 HAD/HHAD/HAFU/TTG/CRS' },
+            optionCode: { type: 'string', description: '选项代码，如 HOME/DRAW/AWAY 或比分' },
+            optionLabel: { type: 'string', description: '用户可读选项，如 主胜、让球平、2:1' },
+            odds: { type: 'number', description: '十进制赔率，未知可省略' },
+            modelProbability: { type: 'number', description: '模型概率 0-1，未知可省略' },
+            ev: { type: 'number', description: '期望收益，未知可省略' },
+            stakeFraction: { type: 'number', description: '建议本金比例，未知可省略' },
+            reason: { type: 'string', description: '该注单建议理由' },
+          },
+          required: ['tier', 'poolCode', 'optionLabel', 'reason'],
+        },
+      },
     },
     required: ['suggestions', 'recommendation', 'confidence', 'reasoning'],
   },
@@ -119,6 +152,30 @@ interface LotteryAnalysisToolCall {
   arguments?: unknown;
 }
 
+function maybeNumber(v: unknown): number | null {
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+function parsePicks(v: unknown): LotteryPickSuggestion[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x))
+    .map((p) => ({
+      tier: String(p.tier ?? 'unknown'),
+      poolCode: String(p.poolCode ?? p.playType ?? ''),
+      optionCode: p.optionCode == null ? undefined : String(p.optionCode),
+      optionLabel: String(p.optionLabel ?? p.selection ?? ''),
+      odds: maybeNumber(p.odds),
+      modelProbability: maybeNumber(p.modelProbability),
+      ev: maybeNumber(p.ev),
+      stakeFraction: maybeNumber(p.stakeFraction),
+      reason: String(p.reason ?? ''),
+    }))
+    .filter((p) => p.poolCode && p.optionLabel && p.reason)
+    .slice(0, 8);
+}
+
 export function parseLotteryAnalysisToolCall(
   content: LotteryAnalysisToolCall[],
   matchId: number,
@@ -127,14 +184,19 @@ export function parseLotteryAnalysisToolCall(
   if (!call || !call.arguments || typeof call.arguments !== 'object') return null;
 
   const args = call.arguments as Record<string, unknown>;
+  const picks = parsePicks(args.picks);
+  const suggestions = Array.isArray(args.suggestions)
+    ? args.suggestions.slice(0, 5).map(String)
+    : picks.slice(0, 5).map((p) => `${p.poolCode}: ${p.optionLabel}`);
   return {
     matchId,
-    suggestions: Array.isArray(args.suggestions) ? args.suggestions.slice(0, 5).map(String) : [],
+    suggestions,
     recommendation: typeof args.recommendation === 'string' ? args.recommendation : '',
     confidence: Math.max(0, Math.min(100, Math.round(Number(args.confidence ?? 50)))),
     reasoning: typeof args.reasoning === 'string' ? args.reasoning : '',
     model: aiInfo.model,
     provider: aiInfo.provider,
+    picks,
   };
 }
 

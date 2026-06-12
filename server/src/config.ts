@@ -44,6 +44,9 @@ export const config = {
     mode: env('SYNC_MODE', 'live') as 'full' | 'live', // live=仅进行中(省额度) / full=全季
     stats: env('SYNC_STATS', 'true') === 'true',
     odds: env('SYNC_ODDS', 'true') === 'true',
+    firoEnabled: env('FIRO_SYNC_ENABLED', 'false') === 'true',
+    firoIntervalMin: Number(env('FIRO_SYNC_INTERVAL_MIN', '30')),
+    firoDays: Number(env('FIRO_SYNC_DAYS', '7')),
   },
 } as const;
 

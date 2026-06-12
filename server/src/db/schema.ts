@@ -139,6 +139,109 @@ export const odds = sqliteTable(
   }),
 );
 
+/* ── Lottery/Firo snapshots (World Cup filtered) ─────────── */
+export const lotteryMatches = sqliteTable(
+  'lottery_matches',
+  {
+    firoMatchId: integer('firo_match_id').primaryKey(),
+    matchId: text('match_id').references(() => matches.id),
+    matchNumStr: text('match_num_str').notNull().default(''),
+    matchDate: text('match_date').notNull().default(''),
+    matchStartDate: text('match_start_date').notNull().default(''),
+    matchTime: text('match_time').notNull().default(''),
+    leagueName: text('league_name').notNull().default(''),
+    leagueShort: text('league_short').notNull().default(''),
+    homeTeamName: text('home_team_name').notNull().default(''),
+    awayTeamName: text('away_team_name').notNull().default(''),
+    matchStatus: text('match_status').notNull().default(''),
+    sellStatus: text('sell_status').notNull().default(''),
+    poolStatus: text('pool_status', { mode: 'json' }).$type<unknown>().notNull().default(sql`'[]'`),
+    raw: text('raw', { mode: 'json' }).$type<unknown>().notNull().default(sql`'{}'`),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().default(sql`(unixepoch() * 1000)`),
+  },
+  (t) => ({
+    byMatch: index('lottery_matches_match_idx').on(t.matchId),
+    byDate: index('lottery_matches_date_idx').on(t.matchStartDate),
+  }),
+);
+
+export const lotteryOddsSnapshots = sqliteTable(
+  'lottery_odds_snapshots',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    firoMatchId: integer('firo_match_id').notNull().references(() => lotteryMatches.firoMatchId),
+    matchId: text('match_id').references(() => matches.id),
+    poolCode: text('pool_code').notNull(),
+    optionCode: text('option_code').notNull(),
+    optionLabel: text('option_label').notNull(),
+    odds: real('odds').notNull(),
+    goalLine: text('goal_line').notNull().default(''),
+    updateTime: integer('update_time', { mode: 'timestamp_ms' }).notNull(),
+    capturedAt: integer('captured_at', { mode: 'timestamp_ms' }).notNull().default(sql`(unixepoch() * 1000)`),
+    source: text('source').notNull().default('firo'),
+    raw: text('raw', { mode: 'json' }).$type<unknown>().notNull().default(sql`'{}'`),
+  },
+  (t) => ({
+    uniqueSnapshot: uniqueIndex('lottery_odds_snapshot_unique_idx').on(t.firoMatchId, t.poolCode, t.optionCode, t.goalLine, t.updateTime),
+    byFiroMatch: index('lottery_odds_firo_match_idx').on(t.firoMatchId),
+    byMatch: index('lottery_odds_match_idx').on(t.matchId),
+    byPool: index('lottery_odds_pool_idx').on(t.poolCode),
+    byCapture: index('lottery_odds_capture_idx').on(t.firoMatchId, t.capturedAt),
+  }),
+);
+
+export const lotteryAnalyses = sqliteTable(
+  'lottery_analyses',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    firoMatchId: integer('firo_match_id').notNull().references(() => lotteryMatches.firoMatchId),
+    matchId: text('match_id').references(() => matches.id),
+    provider: text('provider').notNull().default(''),
+    model: text('model').notNull().default(''),
+    recommendation: text('recommendation').notNull().default(''),
+    confidence: integer('confidence').notNull().default(0),
+    reasoning: text('reasoning').notNull().default(''),
+    raw: text('raw', { mode: 'json' }).$type<unknown>().notNull().default(sql`'{}'`),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().default(sql`(unixepoch() * 1000)`),
+    gradedAt: integer('graded_at', { mode: 'timestamp_ms' }),
+    roiOneUnit: real('roi_one_unit'),
+  },
+  (t) => ({
+    byFiroMatch: index('lottery_analyses_firo_match_idx').on(t.firoMatchId),
+    byMatch: index('lottery_analyses_match_idx').on(t.matchId),
+    byModel: index('lottery_analyses_model_idx').on(t.provider, t.model),
+  }),
+);
+
+export const lotteryPicks = sqliteTable(
+  'lottery_picks',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    analysisId: integer('analysis_id').notNull().references(() => lotteryAnalyses.id),
+    firoMatchId: integer('firo_match_id').notNull().references(() => lotteryMatches.firoMatchId),
+    matchId: text('match_id').references(() => matches.id),
+    tier: text('tier').notNull().default('unknown'),
+    poolCode: text('pool_code').notNull().default(''),
+    optionCode: text('option_code').notNull().default(''),
+    optionLabel: text('option_label').notNull().default(''),
+    odds: real('odds'),
+    modelProbability: real('model_probability'),
+    ev: real('ev'),
+    stakeFraction: real('stake_fraction'),
+    reason: text('reason').notNull().default(''),
+    isHit: integer('is_hit', { mode: 'boolean' }),
+    profitOneUnit: real('profit_one_unit'),
+    gradedAt: integer('graded_at', { mode: 'timestamp_ms' }),
+    raw: text('raw', { mode: 'json' }).$type<unknown>().notNull().default(sql`'{}'`),
+  },
+  (t) => ({
+    byAnalysis: index('lottery_picks_analysis_idx').on(t.analysisId),
+    byMatch: index('lottery_picks_match_idx').on(t.matchId),
+    byPool: index('lottery_picks_pool_idx').on(t.poolCode),
+    byTier: index('lottery_picks_tier_idx').on(t.tier),
+  }),
+);
+
 /* ── Predictions (AI cache) ─────────────────────────────── */
 export const predictions = sqliteTable(
   'predictions',
@@ -210,4 +313,8 @@ export type PredictionRow = typeof predictions.$inferSelect;
 export type MatchStatsRow = typeof matchStats.$inferSelect;
 export type InjuryRow = typeof injuries.$inferSelect;
 export type OddsRow = typeof odds.$inferSelect;
+export type LotteryMatchRow = typeof lotteryMatches.$inferSelect;
+export type LotteryOddsSnapshotRow = typeof lotteryOddsSnapshots.$inferSelect;
+export type LotteryAnalysisRow = typeof lotteryAnalyses.$inferSelect;
+export type LotteryPickRow = typeof lotteryPicks.$inferSelect;
 export type H2hMatchRow = typeof h2hMatches.$inferSelect;

@@ -25,6 +25,14 @@ export function DataProvider({ children }) {
   const playersPromise = useRef(null);
   const statusRef = useRef(status);
   statusRef.current = status;
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   const loadCore = useCallback((opts = {}) => {
     if (!opts.force && statusRef.current.core === 'ready') return Promise.resolve();
@@ -35,11 +43,13 @@ export function DataProvider({ children }) {
 
     corePromise.current = Promise.all([api.teams(), api.matches()])
       .then(([nextTeams, nextMatches]) => {
+        if (!mounted.current) return;
         setTeams(nextTeams);
         setMatches(nextMatches);
         setStatus((s) => ({ ...s, core: 'ready' }));
       })
       .catch((err) => {
+        if (!mounted.current) return;
         setErrors((e) => ({ ...e, core: err.message }));
         setStatus((s) => ({ ...s, core: 'error' }));
       })
@@ -59,10 +69,12 @@ export function DataProvider({ children }) {
 
     playersPromise.current = api.players()
       .then((nextPlayers) => {
+        if (!mounted.current) return;
         setPlayers(nextPlayers);
         setStatus((s) => ({ ...s, players: 'ready' }));
       })
       .catch((err) => {
+        if (!mounted.current) return;
         setErrors((e) => ({ ...e, players: err.message }));
         setStatus((s) => ({ ...s, players: 'error' }));
       })

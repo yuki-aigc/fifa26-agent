@@ -4,7 +4,7 @@
 
 项目当前已具备「世界杯预测 App」的骨架（Elo 基线 + AI 胜平负/比分预测 + 竞彩赔率展示 + AI 竞彩建议），但从**真正辅助竞彩投注决策**的角度看，缺少概率模型、价值判断（EV）、建议闭环验证（ROI）和多维数据，AI 建议目前更像「资讯解读」而非「可验证的投注策略」。
 
-## 现状概览
+## 基线现状（优化前）
 
 - **数据层**：`server/src/db/schema.ts` 有 teams / players / matches / matchStats(xG) / injuries / odds(仅 1X2) / predictions(含对账字段) / h2h。
 - **模型层**：`server/src/domain/elo.ts` 仅 Elo 胜平负 + 单一预测比分；AI 预测（`ai/predictor.ts`）以 Elo + 市场隐含概率为先验。
@@ -96,6 +96,59 @@
 2. firoSync 扩展：结构化解析 HAFU/TTG/CRS 赔率历史；竞彩数据定时落库（纳入 scheduler，独立开关与频率）。
 3. 竞彩对账服务：开奖后回填建议命中/盈亏，新增 `/api/lottery/accuracy`（命中率 + ROI 按模型/玩法/策略档位聚合）。
 4. `/api/lottery/*` 增加本地缓存（DB 优先 + TTL 内存缓存），降低 Firo 依赖。
+
+### Phase 1 实施状态（2026-06-12）
+
+已完成：
+
+1. **竞彩数据表已落库**
+   - 已新增 `lottery_matches`：保存 Firo 世界杯竞彩赛程快照，包含 Firo matchId、本地 matchId、联赛/队名/开赛时间、销售状态、玩法状态 JSON、原始 raw JSON、更新时间。
+   - 已新增 `lottery_odds_snapshots`：保存全玩法赔率时序，包含 poolCode、optionCode、optionLabel、odds、goalLine、updateTime、capturedAt、source、raw JSON，并按 `(firoMatchId,poolCode,optionCode,goalLine,updateTime)` 去重。
+   - 已新增 `lottery_analyses`：保存每次 AI 竞彩分析，包含 provider/model、recommendation/confidence/reasoning、raw JSON、createdAt、gradedAt、roiOneUnit。
+   - 已新增 `lottery_picks`：保存结构化注单建议明细，包含 tier、poolCode、optionCode、optionLabel、odds、modelProbability、ev、stakeFraction、isHit、profitOneUnit。
+   - 已执行 `pnpm --dir server db:push` 更新本地 SQLite。
+
+2. **Firo 同步已扩展为世界杯竞彩落库**
+   - 已复用世界杯过滤逻辑，只落库能映射到本地世界杯赛程的场次。
+   - `firoSync` 已同步 `soccer-events`、`all-list` 和 `odds` 历史接口数据。
+   - HAD/HHAD 已结构化入 `lottery_odds_snapshots`；HAFU/TTG/CRS 已做保守解析，能识别的 option/odds/updateTime 入结构化字段，不能稳定识别的保留 raw JSON，不阻塞同步。
+   - 单日或单接口失败不会终止整批同步，会记录失败日期并继续。
+   - CLI 已保留 `pnpm --dir server sync:firo -- --days=N`，并新增 `--date=YYYY-MM-DD`、`--refresh-details`。
+
+3. **竞彩 API 已改为 DB 优先**
+   - `/api/lottery/matches`：DB 有快照时优先返回本地数据；DB 无数据或 `refresh=1` 时才请求 Firo 并落库。
+   - `/api/lottery/matches/:id`：DB 返回赛程、最新全玩法赔率历史摘要；Firo 可用时刷新详情和赔率，Firo 失败时降级返回本地数据。
+   - `/api/lottery/matches/:id/analysis`：AI 结果已落 `lottery_analyses`，结构化 picks 已落 `lottery_picks`，旧字段 `suggestions/recommendation/confidence/reasoning` 保持兼容。
+   - `/api/lottery/matches/:id/analysis/stream`：流式分析完成后同样会持久化分析结果和 picks。
+   - 已新增 `/api/lottery/accuracy`：按 provider/model、玩法、档位聚合 graded 数、命中数、命中率、profit、ROI。
+
+4. **调度与配置已补齐**
+   - 已新增 `FIRO_SYNC_ENABLED`、`FIRO_SYNC_INTERVAL_MIN`、`FIRO_SYNC_DAYS`。
+   - `scheduler.ts` 已支持 API-Football sync 与 Firo sync 独立运行，各自防重入，互不阻塞。
+
+5. **AI 建议结构已升级**
+   - `submit_lottery_analysis` 工具 schema 已支持结构化 `picks`。
+   - 每条 pick 要求 `tier`、`poolCode`、`optionLabel`、`reason`。
+   - `odds/modelProbability/ev/stakeFraction` 允许为 `null`，Phase 1 先预留字段，不强行实现 EV。
+   - 兼容旧格式：没有 picks 时继续使用旧 `suggestions`；有 picks 但没有 suggestions 时自动派生旧字段。
+
+6. **最小对账闭环已实现**
+   - HAD、HHAD、TTG、CRS 可根据本地最终比分自动判定。
+   - `profitOneUnit = hit ? odds - 1 : -1`，analysis 级别 ROI 会按已对账 picks 回填。
+   - HAFU 因本地目前没有半场比分，暂保持未对账状态。
+
+7. **验证与同步结果**
+   - 已新增测试覆盖 Firo 赔率解析、重复 upsert 去重、AI 新旧格式解析、ROI 命中判定、DB-first 路由、accuracy 空数据稳定结构。
+   - 已通过：`pnpm --dir server test`、`pnpm test`、`pnpm --dir server build`、`pnpm build`、`git diff --check`。
+   - 2026-06-12 09:25 CST 手动执行 `pnpm --dir server sync:firo -- --days=3 --refresh-details` 成功。
+   - 当前本地库结果：`lottery_matches` 12 场，全部映射到本地世界杯赛程；非世界杯计数 0；`lottery_odds_snapshots` 2035 条，其中 CRS 1395、HAD 99、HAFU 261、HHAD 120、TTG 160。
+
+仍未完成或留到后续 Phase：
+
+1. `/api/lottery/*` 已做到 DB 优先和 Firo 兜底，但还没有额外增加 TTL 内存缓存层。
+2. EV、凯利仓位、每日 value 扫描仍属于 Phase 2，当前仅预留字段。
+3. HAFU 自动对账需要半场比分数据后才能稳定启用。
+4. 本轮不新增前端页面；现有竞彩页保持兼容。
 
 ### Phase 2 — 概率模型升级（让系统自己会算）
 
